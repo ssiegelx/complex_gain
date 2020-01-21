@@ -1,0 +1,93 @@
+stability:
+    fpga_restart_file: "/project/rpp-krs/chime/chime_processed/gain/calibration_times/process_archive/201910_thru_201911/fpga_restarts_as_of_20191105.txt"
+    housekeeping_file: #"/scratch/ssiegel/chime/weather/processed/20180403_20190930_temperatures_interpolated_filtered_pca.h5"
+    jump_file: "/scratch/ssiegel/chime/weather/20181008_20191110_jumps.h5"
+    rain_file: "/scratch/ssiegel/chime/weather/20161231_20191111_rain_ranges.h5"
+    data_flags:
+        - "misc"
+        - "globalflag"
+        - "acjump_sd"
+    min_jump_size: 0.25
+    jump_window: 86400.0
+    max_njump: 5
+    start_date:
+    end_date:
+    include_daytime:
+        default: False
+        CYG_A: False
+        CAS_A: False
+        TAU_A: False
+    transit_window: 900.0
+
+    directory: "/project/rpp-krs/chime/chime_processed/gain/rev_01"
+    prefix: "gain_transit_interp"
+    sources:
+        - "CYG_A"
+        - "CAS_A"
+        - "TAU_A"
+
+    diff_pair:
+        - ["CYG_A", "CAS_A"]
+        - ["CYG_A", "TAU_A"]
+        - ["CAS_A", "TAU_A"]
+    nday_shift: [0.0, 0.0, 0.0]
+
+    flaginput_dir: "/project/rpp-krs/chime/chime_archive"
+    flaginput_suffix: "chime_flaginput"
+
+    beam_flag_file: "/scratch/ssiegel/chime/gain/stability/20180624_20191105_raw_stability_data_dbeam_flag_processed.h5"
+    beam_flag_datasets:
+        - "dbeam_phi_processed"
+
+    amp_thermal:
+        enabled: False
+        filename: "/scratch/ssiegel/chime/weather/processed/20161231_20191111_wview_temperatures.h5"
+        field: 'temp'
+        sensor: 'weather_outTemp'
+        interp:
+            kind: 'linear'
+        coeff:
+            X: [-4.15588627e-09, 8.27318534e-06, -2.02181757e-03]
+            Y: [-4.40948632e-09, 8.51834265e-06, -1.99043022e-03]
+            
+
+    apply_rfi_mask: True
+    max_uncertainty: 0.01
+    freq_threshold: 0.70
+    input_threshold: 0.80
+    min_num_transit: 10
+    min_num_freq_for_delay_fit: 100
+
+    conservative:
+        apply_rfi_mask: True
+        max_uncertainty: 0.01
+        freq_threshold: 0.70
+
+    weighted_mean: 0
+    subtract_common_mode_before: False
+    fit_delay_before: False
+
+    index_phase_ref:
+        - 1152
+        - 1408
+
+    output_dir: "/scratch/ssiegel/chime/gain/stability"
+
+
+regress_temp:
+    temp_filename: "/scratch/ssiegel/chime/weather/processed/20161231_20191111_wview_temperatures.h5"
+    temp_field: 'temp'
+    interp:
+        kind: 'linear'
+    sensors:
+        - 'weather_outTemp'
+    datasets:
+        - 'amp'
+        - 'resid_phi'
+        - 'tau'
+    flags:
+        - 'gain'
+        - 'gain'
+        - 'tau'
+    prefix: 'thermal'
+    output_suffix: 'thermal_regression'
