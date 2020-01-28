@@ -81,6 +81,7 @@ regress_temp:
         kind: 'linear'
     sensors:
         - 'weather_outTemp'
+    is_ns_dist:
     datasets:
         - 'amp'
         - 'resid_phi'

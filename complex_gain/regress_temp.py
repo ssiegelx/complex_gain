@@ -12,6 +12,9 @@ import wtl.log as log
 from wtl.namespace import NameSpace
 from wtl.config import load_yaml_config
 
+from ch_util.fluxcat import FluxCatalog
+from ch_util import ephemeris
+
 from temps import TempData
 from stability import StabilityData
 
@@ -136,7 +139,7 @@ class TempRegression(object):
             sigma[~np.isfinite(sigma)] = 0.0
 
             setattr(self, 'mad_' + key, mad)
-            setattr(self, 'sigma_' + key, sigma)
+            setattr(self, 'std_' + key, sigma)
 
 
 ###################################################
@@ -155,7 +158,7 @@ def main(filename, config_file=None, logging_params=DEFAULT_LOGGING):
     logger = log.get_logger(__name__)
 
     # Load the data
-    dsets = config.datasets + ['flags/%s' % name for name in config.flags] + ['timestamp']
+    dsets = config.datasets + ['flags/%s' % name for name in config.flags] + ['timestamp', 'pair_map']
 
     logger.info("Requesting datasets: %s" % str(dsets))
 
@@ -166,6 +169,7 @@ def main(filename, config_file=None, logging_params=DEFAULT_LOGGING):
     # Load the temperatures
     tdata = TempData.from_acq_h5(config.temp_filename)
 
+    # Interpolate requested temperatures to time of transits
     if config.sensors is not None:
         index = np.sort(np.concatenate(tuple([tdata.search_sensors(name) for name in config.sensors])))
     else:
@@ -173,29 +177,48 @@ def main(filename, config_file=None, logging_params=DEFAULT_LOGGING):
 
     temp = tdata.datasets[config.temp_field][index]
     temp_func = scipy.interpolate.interp1d(tdata.time, temp, axis=-1, **config.interp)
-    
-    itemp = temp_func(data.datasets['timestamp'][:])
-    dtemp = (itemp[:, 0] - itemp[:, 1]).T
 
+    itemp = temp_func(data.datasets['timestamp'][:])
+
+    # Difference temperatures between two transits
+    feature = []
+    dtemp = np.zeros((itemp.shape[-1], itemp.shape[0]), dtype=itemp.dtype)
+    for isensor, stemp in enumerate(itemp):
+
+        if config.is_ns_dist and config.is_ns_dist[isensor]:
+
+            feature.append(tdata.sensor[index[isensor]] + '_ns_dist')
+
+            coeff = np.array([[np.sin(np.radians(FluxCatalog[ss].dec - ephemeris.CHIMELATITUDE))
+                               for ss in pair.decode("UTF-8").split('/')]
+                               for pair in data.index_map['pair'][data.datasets['pair_map']]]).T
+
+            dtemp[:, isensor] = coeff[0] * stemp[0] - coeff[1] * stemp[1]
+
+        else:
+            feature.append(tdata.sensor[index[isensor]])
+            dtemp[:, isensor] = stemp[0] - stemp[1]
+
+    # Generate flags for the temperature data
     flag_func = scipy.interpolate.interp1d(tdata.time, tdata.datasets['flag'][index].astype(np.float32),
                                            axis=-1, **config.interp)
 
     dtemp_flag = np.all(flag_func(data.datasets['timestamp'][:]) == 1.0, axis=(0, 1))
 
     # Add temperature information to data object
-    data.create_index_map('feature', np.array(tdata.sensor[index], dtype=np.string_))
+    data.create_index_map('feature', np.array(feature, dtype=np.string_))
 
     dset = data.create_dataset("temp", data=dtemp)
     dset.attrs['axis'] = np.array(['time', 'feature'], dtype=np.string_)
-    
+
     dset = data.create_flag("temp", data=dtemp_flag)
     dset.attrs['axis'] = np.array(['time', 'feature'], dtype=np.string_)
 
     # Perform the fit
     for dkey, fkey in zip(config.datasets, config.flags):
-        
+
         logger.info("Now fitting %s using %s flags" % (dkey, fkey))
-        
+
         this_data = data.datasets[dkey][:]
         expand = tuple([None] * (this_data.ndim - 1) + [slice(None)])
         this_flag = data.flags[fkey][:] & dtemp_flag[expand]
@@ -207,8 +230,8 @@ def main(filename, config_file=None, logging_params=DEFAULT_LOGGING):
         for out in ['model', 'resid']:
             dset = data.create_dataset('_'.join([config.prefix, out, dkey]), data=getattr(fitter, out))
             dset.attrs['axis'] = data.datasets[dkey].attrs['axis'].copy()
-            
-            for stat in ['mad', 'sigma']:
+
+            for stat in ['mad', 'std']:
                 dset = data.create_dataset('_'.join([stat, config.prefix, out, dkey]),
                                            data=getattr(fitter, '_'.join([stat, out])))
                 dset.attrs['axis'] = data.datasets[dkey].attrs['axis'][:-1].copy()
@@ -220,7 +243,7 @@ def main(filename, config_file=None, logging_params=DEFAULT_LOGGING):
         dset = data.create_dataset('_'.join([config.prefix, 'coeff', dkey]), data=fitter.coeff)
         dset.attrs['axis'] = np.array(list(data.datasets[dkey].attrs['axis'][:-1]) + ['feature'], dtype=np.string_)
 
-        
+
     # Save the results to disk
     output_filename = os.path.splitext(filename)[0] + '_' + config.output_suffix + '.h5'
 
