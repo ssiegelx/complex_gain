@@ -49,7 +49,7 @@ stability:
         coeff:
             X: [-4.15588627e-09, 8.27318534e-06, -2.02181757e-03]
             Y: [-4.40948632e-09, 8.51834265e-06, -1.99043022e-03]
-            
+
 
     apply_rfi_mask: True
     max_uncertainty: 0.01
@@ -92,3 +92,100 @@ regress_temp:
         - 'tau'
     prefix: 'thermal'
     output_suffix: 'thermal_regression'
+
+
+joint_regression:
+    directory: "/scratch/ssiegel/chime/gain/stability/delay_analysis/cyga_casa_day_nobeamflg/from_mac"
+
+    data:
+        filename: "20190514_20191123_tau_short_timescales_processed_feed_ref_updated_flags.h5"
+        phase_ref: [1408, 1152]
+
+    preliminary_save:
+        enable: True
+        filename: "20190514_20191123_tau_short_timescales_processed_mezz_ref_timing_added.h5"
+        suffix: "add_timing_mezz_ref"
+
+    mezz_ref:
+        enable: True
+        mezz: [243, 129]
+
+    temperature:
+        filename: "/scratch/ssiegel/chime/weather/processed_wlna2/20181213_20191231_interpolated_temperatures_filtered.h5"
+        load:
+            - "temp"
+            - "temp_lpf"
+        enable: True
+        temp_field: "temp_lpf"
+        sensor:
+            - 'lna'
+        deriv: 0
+
+    timing:
+        enable: True
+        ns_ref: [7, 5]
+        inter_cmn: False
+        sep_delay: False
+        lpf_delay: False
+        hpf_delay: False
+        fit_amp: True
+        ref_amp: False
+        cmn_amp: True
+        hpf_amp: False
+        lpf_amp: True
+        files:
+            - "timing/not_referenced/20181213T010631Z_to_20181220T224335Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20181220T235147Z_to_20190304T135948Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190315T191243Z_to_20190503T115929Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190513T233137Z_to_20190520T140421Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190529T123256Z_to_20190623T191156Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190629T093000Z_to_20190702T151724Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190713T021701Z_to_20190729T130456Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20190803T023342Z_to_20190930T193119Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20191012T022019Z_to_20191025T205906Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20191027T013340Z_to_20191105T074450Z_chimetiming_delay.h5"
+            - "timing/not_referenced/20191105T074500Z_to_20191123T232509Z_chimetiming_delay.h5"
+        add:
+            enable: True
+            kwargs:
+                set_reference: True
+                transit_window: 2400.0
+                ignore_amp: False
+                return_amp: False
+
+
+    ns_distance:
+        enable: True
+        sep_cyl: False
+        temp_field: "temp_lpf"
+        sensor: "weather_outTemp"
+        deriv: 0
+
+    fit_options:
+        sparse: False
+        lsqr: False
+        fmt: 'csr'
+
+    bootstrap:
+        enable: False
+        number: 100
+        fraction: 1.00
+        replace: True
+        by_transit: True
+        index_start: 0
+
+    jackknife:
+        enable: False
+        start: 0.0
+        end: 0.50
+        restrict_stat: False
+
+    output:
+        directory:
+        stat: True
+        coeff: True
+        resid: True
+        suffix: "20190514_20191123_tau_short_timescales_processed_mezz_ref_timing_added"
+
+
+
