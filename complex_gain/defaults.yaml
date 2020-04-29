@@ -110,6 +110,11 @@ joint_regression:
         enable: True
         mezz: [243, 129]
 
+    cable_monitor:
+        enable: False
+        filename: "/home/ssiegel/projects/rpp-krs/ssiegel/cable_monitor/20181220T235147Z_to_20191125T173251Z_cable_monitor_lpf.h5"
+        include_diff: False
+
     temperature:
         filename: "/scratch/ssiegel/chime/weather/processed_wlna2/20181213_20191231_interpolated_temperatures_filtered.h5"
         load:
@@ -153,10 +158,10 @@ joint_regression:
                 ignore_amp: False
                 return_amp: False
 
-
     ns_distance:
         enable: True
         sep_cyl: False
+        use_cable_monitor: False
         temp_field: "temp_lpf"
         sensor: "weather_outTemp"
         deriv: 0

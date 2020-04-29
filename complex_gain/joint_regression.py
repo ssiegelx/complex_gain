@@ -71,7 +71,7 @@ class StabilityData(andata.BaseData):
         return self.index_map['freq']
 
 
-def _concatenate(xdist, xtemp, xtiming):
+def _concatenate(xdist, xtemp, xcable, xtiming):
 
     combine = []
     name = []
@@ -83,6 +83,10 @@ def _concatenate(xdist, xtemp, xtiming):
     if xtemp is not None:
         combine.append(xtemp)
         name += ['temp%d' % tt for tt in range(xtemp.shape[-1])]
+
+    if xcable is not None:
+        combine.append(xcable)
+        name += ['cable%d' % tt for tt in range(xcable.shape[-1])]
 
     if xtiming is not None:
         combine.append(xtiming)
@@ -271,6 +275,24 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         timer.stop()
 
+    # Load cable monitor
+    if config.cable_monitor.enable:
+
+        timer.start("Calculating cable monitor dependence.")
+
+        cbl = timing.TimingCorrection.from_acq_h5(config.cable_monitor.filename)
+
+        kwargs = {'include_diff': config.cable_monitor.include_diff}
+
+        xcable, xcable_flag, xcable_group = sutil.cable_monitor_dependence(sdata, cbl, **kwargs)
+
+        timer.stop()
+
+    else:
+        xcable = None
+        xcable_flag = None
+        xcable_group = None
+
     # Load NS distance
     if config.ns_distance.enable:
 
@@ -286,7 +308,14 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
             if key in config.ns_distance:
                 kwargs[key] = config.ns_distance[key]
 
-        xdist, xdist_flag, xdist_group = sutil.ns_distance_dependence(sdata, tdata, inputmap, **kwargs)
+        if config.ns_distance.use_cable_monitor:
+            kwargs['is_cable_monitor'] = True
+            nsx = timing.TimingCorrection.from_acq_h5(config.cable_monitor.filename)
+        else:
+            kwargs['is_cable_monitor'] = False
+            nsx = tdata
+
+        xdist, xdist_flag, xdist_group = sutil.ns_distance_dependence(sdata, nsx, inputmap, **kwargs)
 
         if (config.ns_distance.deriv is not None) and (config.ns_distance.deriv > 0):
 
@@ -330,11 +359,11 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         timer.stop()
 
     # Combine into single feature matrix
-    x, coeff_name = _concatenate(xdist, xtemp, xtiming)
+    x, coeff_name = _concatenate(xdist, xtemp, xcable, xtiming)
 
-    x_group, _ = _concatenate(xdist_group, xtemp_group, xtiming_group)
+    x_group, _ = _concatenate(xdist_group, xtemp_group, xcable_group, xtiming_group)
 
-    x_flag, _ =  _concatenate(xdist_flag, xtemp_flag, xtiming_flag)
+    x_flag, _ =  _concatenate(xdist_flag, xtemp_flag, xcable_flag, xtiming_flag)
     x_flag = np.all(x_flag, axis=-1) & sdata.flags['tau'][:]
 
     nfeature = x.shape[-1]

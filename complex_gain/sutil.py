@@ -420,33 +420,45 @@ def evaluate_derivative(timestamp, temp, flag, order=2):
 
 
 def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False,
-                           sensor='weather_outTemp', temp_field='temp', **interp_kwargs):
+                           sensor='weather_outTemp', temp_field='temp', is_cable_monitor=False,
+                           **interp_kwargs):
 
     # Some hardcoded parameters
     nfeature = 4
 
     # Interpolate the temperature to the times of measurement
-    tind = tdata.search_sensors(sensor)
+    if is_cable_monitor:
 
-    tempx = tdata.time[:]
-    tempy = tdata.datasets[temp_field][tind[0]]
-    tempf = tdata.datasets['flag'][tind[0]].astype(np.float32)
+        print("Using cable monitor for NS distance dependence.")
 
-    if params is not None:
-        trange = np.percentile(np.concatenate((sdata.time[:], sdata['calibrator_time'][:])), [0, 100])
-        trange[0], trange[-1] = trange[0] - 3600.0, trange[-1] + 3600.0
+        tempx = tdata.time[:]
+        tempy = np.mean(tdata.tau[:], axis=0)
+        tempf = np.all(tdata.num_freq[:] > 0.0, axis=0)
 
-        in_range = np.flatnonzero((tempx >= trange[0]) & (tempx <= trange[-1]) & tempf.astype(np.bool))
+    else:
 
-        tempf = tempf[in_range]
-        tempx = tempx[in_range]
-        tempy = tempy[in_range]
+        tind = tdata.search_sensors(sensor)
 
-        tempy = solve_temp(tempx, tempy, np.atleast_1d(params))
+        tempx = tdata.time[:]
+        tempy = tdata.datasets[temp_field][tind[0]]
+        tempf = tdata.datasets['flag'][tind[0]].astype(np.float32)
 
-    if deriv > 0:
-        tempy = evaluate_derivative(tempx, tempy, tempf, order=deriv)
+        if params is not None:
+            trange = np.percentile(np.concatenate((sdata.time[:], sdata['calibrator_time'][:])), [0, 100])
+            trange[0], trange[-1] = trange[0] - 3600.0, trange[-1] + 3600.0
 
+            in_range = np.flatnonzero((tempx >= trange[0]) & (tempx <= trange[-1]) & tempf.astype(np.bool))
+
+            tempf = tempf[in_range]
+            tempx = tempx[in_range]
+            tempy = tempy[in_range]
+
+            tempy = solve_temp(tempx, tempy, np.atleast_1d(params))
+
+        if deriv > 0:
+            tempy = evaluate_derivative(tempx, tempy, tempf, order=deriv)
+
+    # Create interpolators
     temp_func = interp1d(tempx, tempy, axis=-1, **interp_kwargs)
     flag_func = interp1d(tempx, tempf, axis=-1, **interp_kwargs)
 
@@ -704,6 +716,45 @@ def mean_lna_temp(tdata, field='temp'):
     return mu_lna_temp, norm > 0.0
 
 
+def cable_monitor_dependence(sdata, tdata, include_diff=False, **interp_kwargs):
+
+    # Determine dimensionality
+    ninput, ntime = sdata['tau'].shape
+    nsource = tdata.nsource
+
+    # Use single flag for all noise source inputs
+    flag = np.all(tdata.num_freq[:] > 0.0, axis=0)
+
+    # Calculate the average delay over noise source inputs
+    tau = np.mean(tdata.tau[:], axis=0)[:, np.newaxis]
+
+    # If requested, include the difference in delay between adjacent inputs
+    if include_diff:
+        tau_diff = np.diff(tdata.tau[:], axis=0).T
+        tau = np.concatenate((tau, tau_diff), axis=1)
+
+    nseries = tau.shape[1]
+
+    # Create interpolators
+    temp_func = interp1d(tdata.time, tau, axis=0, **interp_kwargs)
+    flag_func = interp1d(tdata.time, temp_flag.astype(np.float32), **interp_kwargs)
+
+    # Interpolate to the provided times and reference with respect to calibrator transit
+    tdep = (func(sdata.time[:]) -
+            func(sdata['calibrator_time'][:]))[np.newaxis, :, :]
+
+    # Generate common flag for all inputs and series
+    tflag = ((flag_func(sdata.time[:]) == 1.0) &
+             (flag_func(sdata['calibrator_time'][:]) == 1.0))[np.newaxis, :, np.newaxis]
+
+    # Group by input
+    tgroup = np.zeros((ninput, nseries), dtype=np.int)
+    for tt in range(nseries):
+        tgroup[:, tt] = np.arange(ninput)
+
+    return tdep, tflag, tgroup
+
+
 def temperature_dependence(sdata, tdata, sensors, field='temp', deriv=0, **interp_kwargs):
 
     nsensors = len(sensors)
@@ -909,7 +960,7 @@ def cummedian_stream(arr, flag=None, group_index=None,
         group_index = [np.arange(ninput)]
 
     ngroup = len(group_index)
-    
+
     if nscale is None:
         nscale = ntime
 
@@ -924,7 +975,7 @@ def cummedian_stream(arr, flag=None, group_index=None,
     sig_delta = np.zeros((ngroup, ntime), dtype=np.float32)
 
     stream = [[StreamMedian()] * ninput] * nfreq
-    
+
     scale_stream = [StreamMedian()] * ninput
 
     # Loop over times
@@ -951,7 +1002,7 @@ def cummedian_stream(arr, flag=None, group_index=None,
             for gg, gindex in enumerate(group_index):
 
                 delta_group = delta[gindex].copy()
-                
+
                 if tt > nscale:
                     for gi, ii in enumerate(gindex):
                         if any_scale[ii] and (delta_group[gi] > 0.0):
@@ -973,8 +1024,8 @@ def cummedian_stream(arr, flag=None, group_index=None,
 
                     time_flag[gindex, tt] = ((delta_group > 0.0) &
                                              ((delta_group - res['par'][1]) < (nsigma * res['par'][2])))
-                                         
-                
+
+
                     for gi, ii in enumerate(gindex):
                         if time_flag[ii, tt]:
                             scale_stream[ii].insert(delta[ii] - res['par'][1])
