@@ -46,7 +46,7 @@ class TempData(andata.BaseData):
 
         ptn = pattern if is_regex else fnmatch.translate(pattern)
         regex = re.compile(ptn)
-        index = np.array([ii for ii, ss in enumerate(self.sensor[:]) if regex.match(ss)], dtype=np.int)
+        index = np.array([ii for ii, ss in enumerate(self.sensor[:].astype(str)) if regex.match(ss)], dtype=np.int)
         return index
 
     def group_name_allowed(self, name):

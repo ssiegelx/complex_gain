@@ -10,12 +10,12 @@ from scipy.interpolate import interp1d
 from scipy.constants import c as speed_of_light
 from sklearn.linear_model import HuberRegressor
 
-import kzfilt
-
 from ch_util import tools
 from ch_util import timing
 from ch_util import ephemeris
 from ch_util import cal_utils
+
+from . import kzfilt
 
 class TempRegression(object):
 
@@ -984,8 +984,6 @@ def cummedian_stream(arr, flag=None, group_index=None,
         # If this isn't the first time, then calculate the median of past good values
         # for each frequency and input
         if tt >= nstart:
-
-            print tt,
 
             median = np.array([[si.getMedian() for si in sf] for sf in stream])
 
