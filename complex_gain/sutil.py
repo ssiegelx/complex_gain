@@ -736,16 +736,20 @@ def cable_monitor_dependence(sdata, tdata, include_diff=False, **interp_kwargs):
     nseries = tau.shape[1]
 
     # Create interpolators
-    temp_func = interp1d(tdata.time, tau, axis=0, **interp_kwargs)
-    flag_func = interp1d(tdata.time, temp_flag.astype(np.float32), **interp_kwargs)
+    func = interp1d(tdata.time, tau, axis=0, **interp_kwargs)
+    flag_func = interp1d(tdata.time, flag.astype(np.float32), **interp_kwargs)
 
     # Interpolate to the provided times and reference with respect to calibrator transit
     tdep = (func(sdata.time[:]) -
             func(sdata['calibrator_time'][:]))[np.newaxis, :, :]
 
+    tdep = np.repeat(tdep, ninput, axis=0)
+
     # Generate common flag for all inputs and series
     tflag = ((flag_func(sdata.time[:]) == 1.0) &
              (flag_func(sdata['calibrator_time'][:]) == 1.0))[np.newaxis, :, np.newaxis]
+
+    tflag = np.repeat(tflag, ninput, axis=0)
 
     # Group by input
     tgroup = np.zeros((ninput, nseries), dtype=np.int)
