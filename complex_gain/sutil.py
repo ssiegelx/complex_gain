@@ -15,7 +15,7 @@ from ch_util import timing
 from ch_util import ephemeris
 from ch_util import cal_utils
 
-from . import kzfilt
+import kzfilt
 
 class TempRegression(object):
 

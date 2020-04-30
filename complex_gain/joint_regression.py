@@ -358,6 +358,11 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         timer.stop()
 
+    else:
+        xtemp = None
+        xtemp_flag = None
+        xtemp_group = None
+
     # Combine into single feature matrix
     x, coeff_name = _concatenate(xdist, xtemp, xcable, xtiming)
 
@@ -536,9 +541,13 @@ def write_stat(sdata, stat, fitter, output_filename):
         dset.attrs['axis'] = np.array(['input'], dtype=np.string_)
 
         grp = handler.create_group('index_map')
-        grp.create_dataset('input', data=sdata.index_map['input'])
         grp.create_dataset('source', data=np.unique(sdata['source']).astype(np.string_))
         grp.create_dataset('csd', data=np.unique(sdata['csd']))
+
+        inputs = np.array(sdata.index_map['input'][:],
+                          dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
+        grp.create_dataset('input', data=inputs)
+        
 
 
 def write_coeff(sdata, fitter, output_filename):
@@ -551,8 +560,11 @@ def write_coeff(sdata, fitter, output_filename):
         dset.attrs['axis'] = np.array(['input'], dtype=np.string_)
 
         grp = handler.create_group('index_map')
-        grp.create_dataset('input', data=sdata.index_map['input'])
         grp.create_dataset('feature', data=np.array(fitter.coeff_name, dtype=np.string_))
+
+        inputs = np.array(sdata.index_map['input'][:],
+                          dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
+        grp.create_dataset('input', data=inputs)
 
 
 def write_resid(sdata, fitter, output_filename):
