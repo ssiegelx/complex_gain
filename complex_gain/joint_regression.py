@@ -98,6 +98,7 @@ def _concatenate(xdist, xtemp, xcable, xtiming):
     else:
         raise RuntimeError("Did not provide any datasets to concatenate.")
 
+
 class Timer(object):
 
     def __init__(self, logger, minutes=False):
@@ -189,9 +190,6 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
             timer.start("Adding timing data to delay measurements.")
 
             ns_tau, _, ns_flag, ns_inputs = sutil.get_timing_correction(sdata, timing_files, **config.timing.add.kwargs)
-
-            mezz_ns = mezz_index[ns_inputs['chan_id']]
-            crate_ns = crate_index[ns_inputs['chan_id']]
 
             index = timing.map_input_to_noise_source(sdata.index_map['input'], ns_inputs)
 
@@ -310,6 +308,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         if config.ns_distance.use_cable_monitor:
             kwargs['is_cable_monitor'] = True
+            kwargs['use_alpha'] = config.ns_distance.use_alpha
             nsx = timing.TimingCorrection.from_acq_h5(config.cable_monitor.filename)
         else:
             kwargs['is_cable_monitor'] = False
@@ -466,8 +465,9 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
                      np.max(sdata['csd'][:][tind[time_flag_stat]])))
 
         timer.start("Setting up fit.  Bootstrap %d of %d." % (bb+1, nboot))
-        fitter = sutil.JointTempRegression(x_no_mu[:, tind, :], tau[:, tind], x_group, flag=x_flag[:, tind])
-        fitter.coeff_name = coeff_name
+        fitter = sutil.JointTempRegression(x_no_mu[:, tind, :], tau[:, tind], x_group, flag=x_flag[:, tind],
+                                           classification=sdata['source'][:],
+                                           coeff_name=coeff_name)
         timer.stop()
 
         timer.start("Performing fit.  Bootstrap %d of %d." % (bb+1, nboot))
@@ -487,6 +487,12 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         # Save statistics to file
         if config.output.stat:
 
+            # If requested, break the model up into its various components for calculating statistics
+            stat_key = ['data', 'model', 'resid']
+            if config.refine_model.enable:
+                stat_add = fitter.refine_model(config.refine_model.include)
+                stat_key += stat_add
+
             # Redefine axes
             bdata = StabilityData()
             bdata.create_dataset("source", data=sdata["source"][tind])
@@ -497,7 +503,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
             # Calculate statistics
             stat = {}
             for statistic in ['std', 'mad']:
-                for attr in ['data', 'model', 'resid']:
+                for attr in stat_key:
                     for ref, ref_common in zip(['mezz', 'cmn'], [False, True]):
                         stat[(statistic, attr, ref)] = sutil.short_long_stat(bdata, getattr(fitter, attr),
                                                                              fitter._flag & time_flag_stat[np.newaxis, :],
@@ -521,6 +527,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         del fitter
         gc.collect()
+
 
 def write_stat(sdata, stat, fitter, output_filename):
 
@@ -547,23 +554,23 @@ def write_stat(sdata, stat, fitter, output_filename):
         inputs = np.array(sdata.index_map['input'][:],
                           dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
         grp.create_dataset('input', data=inputs)
-        
 
 
 def write_coeff(sdata, fitter, output_filename):
+
+    inputs = np.array(sdata.index_map['input'][:],
+                      dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
 
     with h5py.File(output_filename, 'w') as handler:
         dset = handler.create_dataset('coeff', data=fitter.coeff)
         dset.attrs['axis'] = np.array(['input', 'feature'], dtype=np.string_)
 
         dset = handler.create_dataset('intercept', data=fitter.intercept)
-        dset.attrs['axis'] = np.array(['input'], dtype=np.string_)
+        dset.attrs['axis'] = np.array(['input', 'classification'], dtype=np.string_)
 
         grp = handler.create_group('index_map')
         grp.create_dataset('feature', data=np.array(fitter.coeff_name, dtype=np.string_))
-
-        inputs = np.array(sdata.index_map['input'][:],
-                          dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
+        grp.create_dataset('classification', data=np.array(fitter.intercept_name, dtype=np.string_))
         grp.create_dataset('input', data=inputs)
 
 

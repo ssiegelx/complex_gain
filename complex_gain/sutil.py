@@ -15,7 +15,7 @@ from ch_util import timing
 from ch_util import ephemeris
 from ch_util import cal_utils
 
-import kzfilt
+from . import kzfilt
 
 class TempRegression(object):
 
@@ -200,7 +200,8 @@ class TempRegressionGroups(TempRegression):
 
 class JointTempRegression(TempRegression):
 
-    def __init__(self, x, data, groups, flag=None, fit_intercept=True):
+    def __init__(self, x, data, groups, classification=None,
+                 flag=None, fit_intercept=True, coeff_name=None):
 
         self.log = logging.getLogger(str(self))
 
@@ -220,6 +221,13 @@ class JointTempRegression(TempRegression):
 
         ninput, ntime = data.shape
         nfeature = x.shape[-1]
+
+        self._base_x = x
+
+        if coeff_name is None:
+            coeff_name = ['feature%d' % dd for dd in range(nfeature)]
+
+        self.coeff_name = coeff_name
 
         # Determine correlated groups
         self._groups = groups
@@ -246,18 +254,31 @@ class JointTempRegression(TempRegression):
                 counter += 1
 
         # Add input dependent intercept
+        self.nintercept = 0
+        self.intercept_name = ['intercept']
         if self.fit_intercept:
-            for ii in range(ninput):
-                y += [1.0] * ntime
-                row += list(flat_index[ii, :])
-                col += [counter] * ntime
-                counter += 1
+            if classification is not None:
+                uniqc, indc = np.unique(classification, return_inverse=True)
+                self.nintercept = uniqc.size
+                self.intercept_name = uniqc
+                cgroups = [(cg.size, cg) for cg in [np.flatnonzero(indc == uc) for uc in range(self.nintercept)]]
+            else:
+                self.nintercept = 1
+                cgroups = [(ntime, slice(None))]
 
+            for ii in range(ninput):
+                for ng, cg in cgroups:
+                    y += [1.0] * ng
+                    row += list(flat_index[ii, cg])
+                    col += [counter] * ng
+                    counter += 1
+
+        # Convert to sparse matrix
         y = np.array(y)
         row = np.array(row)
         col = np.array(col)
 
-        self._x = scipy.sparse.coo_matrix((y, (row, col)), shape=(ninput * ntime, self.ncoeff+int(self.fit_intercept) * ninput))
+        self._x = scipy.sparse.coo_matrix((y, (row, col)), shape=(ninput * ntime, self.ncoeff + self.nintercept * ninput))
 
         # Save datasets to object
         self._flag = flag
@@ -337,15 +358,49 @@ class JointTempRegression(TempRegression):
 
         # Save intercept
         if self.fit_intercept:
-            self.intercept = coeff[self.ncoeff:]
+            self.intercept = coeff[self.ncoeff:].reshape(self.N, self.nintercept)
         else:
-            self.intercept = np.zeros(self.N, dtype=np.float32)
+            self.intercept = np.zeros((self.N, 1), dtype=np.float32)
 
         # Compute number of data points that were fit, as well as the model and residual
         self.number = np.sum(self._flag.astype(np.int), axis=-1)
 
         self.model = self._x.dot(coeff).reshape(self.data.shape)
         self.resid = self.data - self.model
+
+    def refine_model(self, include):
+
+        all_names = []
+        for inc in include:
+
+            name, index = self._get_feature_index(inc)
+
+            if index.size > 0:
+
+                model = np.sum(self.coeff[:, np.newaxis, index] * self._base_x[:, :, index], axis=-1)
+
+                attr = '_'.join(['model', name])
+                setattr(self, attr, model)
+                all_names.append(attr)
+
+                attr = '_'.join(['resid', name])
+                setattr(self, attr, self.data - model)
+                all_names.append(attr)
+
+        return all_names
+
+    def _get_feature_index(self, include):
+
+        if not isinstance(include, (list, tuple)):
+            include = [include]
+
+        index = []
+        for inc in include:
+            index += [ff for ff, feat in enumerate(self.coeff_name) if feat.startswith(inc)]
+
+        description = '_'.join(include)
+
+        return description, np.unique(index)
 
 
 def get_pol(sdata, inputmap):
@@ -420,19 +475,26 @@ def evaluate_derivative(timestamp, temp, flag, order=2):
 
 
 def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False,
-                           sensor='weather_outTemp', temp_field='temp', is_cable_monitor=False,
+                           sensor='weather_outTemp', temp_field='temp', is_cable_monitor=False, use_alpha=False,
                            **interp_kwargs):
 
     # Some hardcoded parameters
-    nfeature = 4
+    unique_source = np.unique(sdata['source'][:])
+    nfeature = 2 + unique_source.size
+
+    scale = 1e12 * 1e-5 / speed_of_light
 
     # Interpolate the temperature to the times of measurement
     if is_cable_monitor:
 
-        print("Using cable monitor for NS distance dependence.")
+        if use_alpha:
+            print("Using cable monitor alpha for NS distance dependence.")
+            tempy = np.mean(tdata.alpha[:], axis=0)
+        else:
+            print("Using cable monitor tau for NS distance dependence.")
+            tempy = np.mean(tdata.tau[:], axis=0)
 
         tempx = tdata.time[:]
-        tempy = np.mean(tdata.tau[:], axis=0)
         tempf = np.all(tdata.num_freq[:] > 0.0, axis=0)
 
     else:
@@ -467,8 +529,6 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
         lat = np.radians(ephemeris.CHIMELATITUDE)
         return np.cos(lat) * np.sin(np.radians(dec)) - np.sin(lat) * np.cos(np.radians(dec)) * np.cos(np.radians(ha))
 
-    scale = 1e12 * 1e-5 / speed_of_light
-
     ix = np.zeros((sdata.ntime, nfeature), dtype=np.float32)
 
     ix[:, 0] = scale * ecoord(sdata['calibrator_dec'][:], ha=0.0)
@@ -477,7 +537,7 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
                         ecoord(sdata['calibrator_dec'][:], ha=0.0) * temp_func(sdata['calibrator_time'][:]))
 
     hdep = scale * ecoord(sdata['dec'][:], ha=sdata['ha'][:])
-    for ss, src in enumerate(np.unique(sdata['source'][:])):
+    for ss, src in enumerate(unique_source):
         this_source = sdata['source'][:] == src
         ix[:, 2+ss] = np.where(this_source, hdep, 0.0)
 
@@ -519,7 +579,7 @@ def get_timing_correction(sdata, files, set_reference=False, transit_window=2400
 
     tcorr = [timing.TimingCorrection.from_acq_h5(tf) for tf in files]
 
-    inputs = tcorr[0].input
+    inputs = tcorr[0].noise_source
     nns = inputs.size
     shp = (nns, sdata.ntime)
     dtype = sdata['tau'].dtype

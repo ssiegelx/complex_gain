@@ -108,7 +108,10 @@ def compute_common_mode(y, flag, groups, median=True):
     nfreq, ninput, ntransit = y.shape
     ngroup = len(groups)
 
-    cmn = np.zeros((nfreq, ngroup, ntransit), dtype=y.dtype)
+    shp = (nfreq, ngroup, ntransit)
+
+    flg = np.zeros(shp, dtype=np.bool)
+    cmn = np.zeros(shp, dtype=y.dtype)
 
     for ff in range(nfreq):
 
@@ -121,13 +124,15 @@ def compute_common_mode(y, flag, groups, median=True):
 
                 if np.any(this_flag):
 
+                    flg[ff, gg, tt] = True
+
                     if median:
                         cmn[ff, gg, tt] = wq.median(this_y, this_flag)
 
                     else:
                         cmn[ff, gg, tt] = np.sum(this_flag * this_y) * tools.invert_no_zero(np.sum(this_flag))
 
-    return cmn
+    return cmn, flg
 
 ###################################################
 # main routine
@@ -420,6 +425,10 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         for kk in range(2):
             inpflg[kk, :, tt] = inpflg[kk, input_sort[kk, :, tt], tt]
 
+    # Do not apply input flag to phase reference
+    for ii in config.index_phase_ref:
+        inpflg[:, ii, :] = True
+
     ## Flag out gains with high uncertainty and frequencies with large fraction of data flagged
     frac_err = tools.invert_no_zero(np.sqrt(weight) * np.abs(gain))
 
@@ -491,8 +500,13 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
 
     ## Flag inputs with large amount of missing data
-    input_flag = ((np.sum(flag[good_freq, :, :], axis=(0, 2), dtype=np.float32) /
-                   float(good_freq.size * ntransit)) > config.input_threshold)
+    input_frac_flagged = (np.sum(flag[good_freq, :, :], axis=(0, 2), dtype=np.float32) /
+                          float(good_freq.size * ntransit))
+    input_flag = input_frac_flagged > config.input_threshold
+
+    for ii in config.index_phase_ref:
+        logger.info("Phase reference %d has %0.3f fraction of data flagged." % (ii, input_frac_flagged[ii]))
+        input_flag[ii] = True
 
     good_input = np.flatnonzero(input_flag)
 
@@ -532,6 +546,15 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
     pol_list = [xpol, ypol]
 
+    index_phase_ref = []
+    for pp, ipol in enumerate(pol_list):
+        candidate = [ii for ii in config.index_phase_ref if ii in ipol]
+        if len(candidate) != 1:
+            raise RuntimeError("Could not find phase reference for pol %s." % pol_str[pp])
+        else:
+            index_phase_ref.append(candidate[0])
+
+    logger.info("Phase reference: %s" % ', '.join(['%s = %d' % tpl for tpl in zip(pol_list, index_phase_ref)]))
 
     ## Apply thermal correction to amplitude
     if config.amp_thermal.enabled:
@@ -566,14 +589,15 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
     ## Compute common mode
     if config.subtract_common_mode_before:
         logger.info("Calculating common mode amplitude and phase.")
-        cmn_amp = compute_common_mode(amp, flag, pol_list_noref, median=False)
-        cmn_phi = compute_common_mode(phi, flag, pol_list_noref, median=False)
+        cmn_amp, flag_cmn_amp = compute_common_mode(amp, flag, pol_list_noref, median=False)
+        cmn_phi, flag_cmn_phi = compute_common_mode(phi, flag, pol_list_noref, median=False)
 
         # Subtract common mode (from phase only)
         logger.info("Subtracting common mode phase.")
         pol_flag = np.zeros((npol, ninput), dtype=np.bool)
-        for pp, ipol in enumerate(pol_list):
+        for pp, (ipol, iref) in enumerate(zip(pol_list, index_phase_ref)):
             pol_flag[pp, ipol] = True
+            flag[:, iref, :] = flag_cmn_phi[:, pp, :]
             phi[:, ipol, :] -= cmn_phi[:, pp, np.newaxis, :]
 
 
@@ -645,14 +669,15 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
     # Compute common mode
     if not config.subtract_common_mode_before:
         logger.info("Calculating common mode amplitude and phase.")
-        cmn_amp = compute_common_mode(damp, flag, pol_list_noref, median=True)
-        cmn_phi = compute_common_mode(dphi, flag, pol_list_noref, median=True)
+        cmn_amp, flag_cmn_amp = compute_common_mode(damp, flag, pol_list_noref, median=True)
+        cmn_phi, flag_cmn_phi = compute_common_mode(dphi, flag, pol_list_noref, median=True)
 
         # Subtract common mode (from phase only)
         logger.info("Subtracting common mode phase.")
         pol_flag = np.zeros((npol, ninput), dtype=np.bool)
-        for pp, ipol in enumerate(pol_list):
+        for pp, (ipol, iref) in enumerate(zip(pol_list, index_phase_ref)):
             pol_flag[pp, ipol] = True
+            flag[:, iref, :] = flag_cmn_phi[:, pp, :]
             dphi[:, ipol, :] = dphi[:, ipol, :] - cmn_phi[:, pp, np.newaxis, :]
 
 
@@ -702,7 +727,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         # Compute residuals
         logger.info("Subtracting delay template from phase.")
         resid = (dphi - tau[np.newaxis, :, :] * omega[:, np.newaxis, np.newaxis]) * flag.astype(np.float32)
-        
+
     else:
         resid = dphi
 
@@ -1010,6 +1035,8 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         dset.attrs['axis'] = np.array(dct['axis'], dtype=np.string_)
 
+    data.attrs['phase_ref'] = np.array(index_phase_ref)
+
     # Determine the output filename and save results
     start_time, end_time = ephemeris.unix_to_datetime(np.percentile(timestamp, [0, 100]))
     tfmt = "%Y%m%d"
@@ -1023,6 +1050,9 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
 
 class StabilityData(andata.BaseData):
+
+    convert_attribute_strings = True
+    convert_dataset_strings = True
 
     @property
     def time(self):
