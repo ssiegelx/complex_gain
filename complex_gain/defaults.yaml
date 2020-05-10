@@ -162,6 +162,7 @@ joint_regression:
         enable: True
         sep_cyl: False
         use_cable_monitor: False
+        use_alpha: False
         temp_field: "temp_lpf"
         sensor: "weather_outTemp"
         deriv: 0
@@ -184,6 +185,12 @@ joint_regression:
         start: 0.0
         end: 0.50
         restrict_stat: False
+
+
+    refine_model:
+        enable: False
+        include:
+            - ["timing", "dist"]
 
     output:
         directory:
