@@ -71,6 +71,8 @@ stability:
         - 1152
         - 1408
 
+    group_by_cyl: False
+
     output_dir: "/scratch/ssiegel/chime/gain/stability"
 
 

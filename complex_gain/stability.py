@@ -527,34 +527,39 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
     phi = np.angle(gaincal)
 
     ## Calculate polarisation groups
-    pol_str = ['X', 'Y']
-    npol = len(pol_str)
+    pol_dict = {'E': 'X', 'S': 'Y'}
+    cyl_dict = {2: 'A', 3: 'B', 4: 'C', 5: 'D'}
 
-    xpol_noref = np.array([ii for ii, inp in enumerate(inputmap)
-                     if tools.is_chime(inp) and tools.is_array_x(inp) and
-                     (ii not in config.index_phase_ref) and (ii in good_input)])
-    ypol_noref = np.array([ii for ii, inp in enumerate(inputmap)
-                     if tools.is_chime(inp) and tools.is_array_y(inp) and
-                     (ii not in config.index_phase_ref) and (ii in good_input)])
+    if config.group_by_cyl:
+        group_id = [(inp.pol, inp.cyl) if tools.is_chime(inp) and (ii in good_input) else None
+                    for ii, inp in enumerate(inputmap)]
+    else:
+        group_id = [inp.pol if tools.is_chime(inp) and (ii in good_input) else None
+                    for ii, inp in enumerate(inputmap)]
 
-    pol_list_noref = [xpol_noref, ypol_noref]
+    ugroup_id = sorted([uidd for uidd in set(group_id) if uidd is not None])
+    ngroup = len(ugroup_id)
 
-    xpol = np.array([ii for ii, inp in enumerate(inputmap)
-                     if tools.is_chime(inp) and tools.is_array_x(inp) and (ii in good_input)])
-    ypol = np.array([ii for ii, inp in enumerate(inputmap)
-                     if tools.is_chime(inp) and tools.is_array_y(inp) and (ii in good_input)])
+    group_list_noref = [np.array([gg for gg, gid in enumerate(group_id) if (gid == ugid) and gg not in config.index_phase_ref])
+                        for ugid in ugroup_id]
 
-    pol_list = [xpol, ypol]
+    group_list = [np.array([gg for gg, gid in enumerate(group_id) if gid == ugid])
+                  for ugid in ugroup_id]
+
+    if config.group_by_cyl:
+        group_str = ["%s-%s" % (pol_dict[pol], cyl_dict[cyl]) for pol, cyl in ugroup_id]
+    else:
+        group_str = [pol_dict[pol] for pol in ugroup_id]
 
     index_phase_ref = []
-    for pp, ipol in enumerate(pol_list):
-        candidate = [ii for ii in config.index_phase_ref if ii in ipol]
+    for gstr, igroup in zip(group_str, group_list):
+        candidate = [ii for ii in config.index_phase_ref if ii in igroup]
         if len(candidate) != 1:
-            raise RuntimeError("Could not find phase reference for pol %s." % pol_str[pp])
+            index_phase_ref.append(None)
         else:
             index_phase_ref.append(candidate[0])
 
-    logger.info("Phase reference: %s" % ', '.join(['%s = %d' % tpl for tpl in zip(pol_list, index_phase_ref)]))
+    logger.info("Phase reference: %s" % ', '.join(['%s = %s' % tpl for tpl in zip(group_str, index_phase_ref)]))
 
     ## Apply thermal correction to amplitude
     if config.amp_thermal.enabled:
@@ -579,26 +584,30 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         flag &= dtemp_flag[np.newaxis, np.newaxis, :]
 
-        for pp, (pstr, ipol) in enumerate(zip(pol_str, pol_list)):
+        for gstr, igroup in zip(group_str, group_list):
+            pstr = gstr[0]
             thermal_coeff = np.polyval(config.amp_thermal.coeff[pstr], freq)
             gthermal = 1.0 + thermal_coeff[:, np.newaxis, np.newaxis] * dtemp[np.newaxis, np.newaxis, :]
 
-            amp[:, ipol, :] *= tools.invert_no_zero(gthermal)
+            amp[:, igroup, :] *= tools.invert_no_zero(gthermal)
 
 
     ## Compute common mode
     if config.subtract_common_mode_before:
         logger.info("Calculating common mode amplitude and phase.")
-        cmn_amp, flag_cmn_amp = compute_common_mode(amp, flag, pol_list_noref, median=False)
-        cmn_phi, flag_cmn_phi = compute_common_mode(phi, flag, pol_list_noref, median=False)
+        cmn_amp, flag_cmn_amp = compute_common_mode(amp, flag, group_list_noref, median=False)
+        cmn_phi, flag_cmn_phi = compute_common_mode(phi, flag, group_list_noref, median=False)
 
         # Subtract common mode (from phase only)
         logger.info("Subtracting common mode phase.")
-        pol_flag = np.zeros((npol, ninput), dtype=np.bool)
-        for pp, (ipol, iref) in enumerate(zip(pol_list, index_phase_ref)):
-            pol_flag[pp, ipol] = True
-            flag[:, iref, :] = flag_cmn_phi[:, pp, :]
-            phi[:, ipol, :] -= cmn_phi[:, pp, np.newaxis, :]
+        group_flag = np.zeros((ngroup, ninput), dtype=np.bool)
+        for gg, igroup in enumerate(group_list):
+            group_flag[gg, igroup] = True
+            phi[:, igroup, :] = phi[:, igroup, :] - cmn_phi[:, gg, np.newaxis, :]
+
+            for iref in index_phase_ref:
+                if (iref is not None) and (iref in igroup):
+                    flag[:, iref, :] = flag_cmn_phi[:, gg, :]
 
 
     ## If requested, determine and subtract a delay template
@@ -669,17 +678,19 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
     # Compute common mode
     if not config.subtract_common_mode_before:
         logger.info("Calculating common mode amplitude and phase.")
-        cmn_amp, flag_cmn_amp = compute_common_mode(damp, flag, pol_list_noref, median=True)
-        cmn_phi, flag_cmn_phi = compute_common_mode(dphi, flag, pol_list_noref, median=True)
+        cmn_amp, flag_cmn_amp = compute_common_mode(damp, flag, group_list_noref, median=True)
+        cmn_phi, flag_cmn_phi = compute_common_mode(dphi, flag, group_list_noref, median=True)
 
         # Subtract common mode (from phase only)
         logger.info("Subtracting common mode phase.")
-        pol_flag = np.zeros((npol, ninput), dtype=np.bool)
-        for pp, (ipol, iref) in enumerate(zip(pol_list, index_phase_ref)):
-            pol_flag[pp, ipol] = True
-            flag[:, iref, :] = flag_cmn_phi[:, pp, :]
-            dphi[:, ipol, :] = dphi[:, ipol, :] - cmn_phi[:, pp, np.newaxis, :]
+        group_flag = np.zeros((ngroup, ninput), dtype=np.bool)
+        for gg, igroup in enumerate(group_list):
+            group_flag[gg, igroup] = True
+            dphi[:, igroup, :] = dphi[:, igroup, :] - cmn_phi[:, gg, np.newaxis, :]
 
+            for iref in index_phase_ref:
+                if (iref is not None) and (iref in igroup):
+                    flag[:, iref, :] = flag_cmn_phi[:, gg, :]
 
     ## Compute RMS
     logger.info("Calculating RMS of amplitude and phase.")
@@ -867,7 +878,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
                     },
 
             "flags/group_flag": {
-                     "data": pol_flag,
+                     "data": group_flag,
                      "axis": ["group", "input"],
                      "flag": True
                     },
@@ -1019,7 +1030,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
     data.create_index_map("div", np.array(["numerator", "denominator"], dtype=np.string_))
     data.create_index_map("pair", np.array(uniq_diff, dtype=np.string_))
-    data.create_index_map("group", np.array(pol_str, dtype=np.string_))
+    data.create_index_map("group", np.array(group_str, dtype=np.string_))
 
     data.create_index_map("freq", freq)
     data.create_index_map("input", inputs)
@@ -1035,7 +1046,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         dset.attrs['axis'] = np.array(dct['axis'], dtype=np.string_)
 
-    data.attrs['phase_ref'] = np.array(index_phase_ref)
+    data.attrs['phase_ref'] = np.array([iref for iref in index_phase_ref if iref is not None])
 
     # Determine the output filename and save results
     start_time, end_time = ephemeris.unix_to_datetime(np.percentile(timestamp, [0, 100]))
