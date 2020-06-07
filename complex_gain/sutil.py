@@ -15,7 +15,7 @@ from ch_util import timing
 from ch_util import ephemeris
 from ch_util import cal_utils
 
-from . import kzfilt
+from complex_gain import kzfilt
 
 class TempRegression(object):
 
@@ -278,7 +278,11 @@ class JointTempRegression(TempRegression):
         row = np.array(row)
         col = np.array(col)
 
-        self._x = scipy.sparse.coo_matrix((y, (row, col)), shape=(ninput * ntime, self.ncoeff + self.nintercept * ninput))
+        nparam = self.ncoeff + self.nintercept * ninput
+        self.log.info("%d parameters in total.  (%d coefficients, %d x %d intercepts)" %
+                      (nparam, self.ncoeff, self.nintercept, ninput))
+
+        self._x = scipy.sparse.coo_matrix((y, (row, col)), shape=(ninput * ntime, nparam))
 
         # Save datasets to object
         self._flag = flag
@@ -358,9 +362,9 @@ class JointTempRegression(TempRegression):
 
         # Save intercept
         if self.fit_intercept:
-            self.intercept = coeff[self.ncoeff:].reshape(self.N, self.nintercept)
+            self.intercept = coeff[self.ncoeff:].reshape(self.N + (self.nintercept,))
         else:
-            self.intercept = np.zeros((self.N, 1), dtype=np.float32)
+            self.intercept = np.zeros(self.N + (1,), dtype=np.float32)
 
         # Compute number of data points that were fit, as well as the model and residual
         self.number = np.sum(self._flag.astype(np.int), axis=-1)
@@ -480,7 +484,7 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
 
     # Some hardcoded parameters
     unique_source = np.unique(sdata['source'][:])
-    nfeature = 2 + unique_source.size
+    nfeature = 1 + unique_source.size
 
     scale = 1e12 * 1e-5 / speed_of_light
 
@@ -531,15 +535,15 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
 
     ix = np.zeros((sdata.ntime, nfeature), dtype=np.float32)
 
-    ix[:, 0] = scale * ecoord(sdata['calibrator_dec'][:], ha=0.0)
+    # ix[:, 0] = scale * ecoord(sdata['calibrator_dec'][:], ha=0.0)
 
-    ix[:, 1] = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) * temp_func(sdata.time[:]) -
+    ix[:, 0] = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) * temp_func(sdata.time[:]) -
                         ecoord(sdata['calibrator_dec'][:], ha=0.0) * temp_func(sdata['calibrator_time'][:]))
 
     hdep = scale * ecoord(sdata['dec'][:], ha=sdata['ha'][:])
     for ss, src in enumerate(unique_source):
         this_source = sdata['source'][:] == src
-        ix[:, 2+ss] = np.where(this_source, hdep, 0.0)
+        ix[:, 1+ss] = np.where(this_source, hdep, 0.0)
 
     # Determine NS baseline distance and reference appropriately
     feedpos = tools.get_feed_positions(inputmap)
@@ -609,7 +613,9 @@ def get_timing_correction(sdata, files, set_reference=False, transit_window=2400
             continue
 
         if set_reference:
-            transit_time = ephemeris.transit_times(ephemeris.source_dictionary[src], timestamp[0], timestamp[-1])[0]
+            transit_time = ephemeris.transit_times(ephemeris.source_dictionary[src],
+                                                   timestamp[0] - transit_window,
+                                                   timestamp[-1] + transit_window)[0]
             tc.set_global_reference_time(transit_time, window=transit_window, **interp_kwargs)
 
         if return_amp:
@@ -865,7 +871,7 @@ def mean_subtract(axes, dataset, flag, use_calibrator=False):
     usources = np.unique(axes['source'][:])
     ucsd = np.unique(axes['csd'][:])
 
-    cal = axes.attrs['calibrator']
+    cal = axes.attrs.get('calibrator', 'CYG_A')
 
     nsources = usources.size
     ncsd = ucsd.size
