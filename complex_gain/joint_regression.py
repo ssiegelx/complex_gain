@@ -28,8 +28,8 @@ from ch_util import cal_utils
 from ch_util import timing
 from ch_util import rfi
 
-import sutil
-from temps import TempData
+from complex_gain import sutil
+from complex_gain.temps import TempData
 
 ###################################################
 # default variables
@@ -372,6 +372,8 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
     nfeature = x.shape[-1]
 
+    logger.info("Fitting %d features." % nfeature)
+
     # Save data
     if config.preliminary_save.enable:
 
@@ -498,7 +500,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
             bdata.create_dataset("source", data=sdata["source"][tind])
             bdata.create_dataset("csd", data=sdata["csd"][tind])
             bdata.create_index_map("input", sdata.index_map["input"][:])
-            bdata.attrs["calibrator"] = sdata.attrs["calibrator"]
+            bdata.attrs["calibrator"] = sdata.attrs.get("calibrator", "CYG_A")
 
             # Calculate statistics
             stat = {}
