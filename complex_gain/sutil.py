@@ -894,15 +894,15 @@ def mean_subtract(axes, dataset, flag, use_calibrator=False):
     return dataset_no_mu, mu, mu_flag
 
 
-def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None, source=None):
+def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None):
 
     ninput, ntime = dataset.shape
     weight = flag.astype(dataset.dtype)
 
-    usources = np.unique(axes['source'][:])
+    usources = list(set([pair for pair in zip(axes['calibrator'][:], axes['source'][:])]))
     ucsd = np.unique(axes['csd'][:])
 
-    nsources = usources.size
+    nsources = len(usources)
     ncsd = ucsd.size
 
     dataset_no_mu = dataset.copy()
@@ -915,12 +915,13 @@ def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None,
 
     mu = np.zeros((ninput, ncsd, nsources), dtype=dataset.dtype)
     mu_flag = np.zeros((ninput, ncsd, nsources), dtype=np.bool)
+    time_diff = np.zeros((ncsd, nsources), dtype=np.float32)
 
     for cc, csd in enumerate(ucsd):
 
-        for ss, src in enumerate(usources):
+        for ss, (cal, src) in enumerate(usources):
 
-            this_time = np.flatnonzero((axes['source'][:] == src) & (axes['csd'][:] == csd))
+            this_time = np.flatnonzero((axes['source'][:] == src) & (axes['calibrator'][:] == cal) & (axes['csd'][:] == csd))
 
             if this_time.size > 0:
                 norm = np.sum(weight[:, this_time], axis=-1)
@@ -931,32 +932,49 @@ def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None,
                 mu[:, cc, ss] = this_mu
                 mu_flag[:, cc, ss] = norm > 0.0
 
-
-    if source is not None:
-        print("Calculating long timescale statistics for %s." % source)
-        non_cal = np.flatnonzero(usources == source)
-    else:
-        calibrator = axes['calibrator'] if 'calibrator' in axes else axes.attrs['calibrator']
-        print("Calculating long timescale statistics ignoring %s." % calibrator)
-        non_cal = np.flatnonzero(usources != calibrator)
+                csd_cal = np.mean(axes['calibrator_time'][this_time])
+                time_diff[cc, ss] = np.mean(axes.time[this_time]) - np.mean(axes['calibrator_time'][this_time])
 
     nan_short = np.where(flag, dataset_no_mu, np.nan)
-    nan_long = np.where(mu_flag[:, :, non_cal], mu[:, :, non_cal], np.nan)
+    nan_long = np.where(mu_flag, mu, np.nan)
+
+    non_cal = np.array([ii for ii, pair in enumerate(usources) if pair[0] != pair[1]])
+    nan_long_noncal = np.where(mu_flag[:, :, non_cal], mu[:, :, non_cal], np.nan)
 
     res = {}
+
+    # Save the mean value for each CSD/source pair
     res['mu'] = mu
     res['mu_flag'] = mu_flag
 
-    if stat == 'mad':
-        med = np.nanmedian(nan_short, axis=-1)
-        res['short'] = 1.48625 * np.nanmedian(np.abs(nan_short - med[:, np.newaxis]), axis=-1)
+    # Save the source pair axes and the time offset between them
+    res['source_pair'] = np.array(["%s/%s" % pair for pair in usources])
+    res['time_diff'] = time_diff
 
-        med = np.nanmedian(nan_long, axis=(1, 2))
-        res['long'] = 1.48625 * np.nanmedian(np.abs(nan_long - med[:, np.newaxis, np.newaxis]), axis=(1, 2))
+    # Save the other axes
+    res['input'] = axes.index_map['input'][:]
+    res['csd'] = ucsd
+
+    # Save the number of data points used to calculate statistics
+    res['num_short'] = np.sum(flag, axis=1)
+    res['num_long'] = np.sum(mu_flag, axis=(1, 2))
+    res['num_long_by_source'] = np.sum(mu_flag, axis=1)
+
+    # Calculate the requested statistics
+    if stat == 'mad':
+        med = np.nanmedian(nan_short, axis=1)
+        res['short'] = 1.48625 * np.nanmedian(np.abs(nan_short - med[:, np.newaxis]), axis=1)
+
+        med = np.nanmedian(nan_long_noncal, axis=(1, 2))
+        res['long'] = 1.48625 * np.nanmedian(np.abs(nan_long_noncal - med[:, np.newaxis, np.newaxis]), axis=(1, 2))
+
+        med = np.nanmedian(nan_long, axis=1)
+        res['long_by_source'] =  1.48625 * np.nanmedian(np.abs(nan_long - med[:, np.newaxis, :]), axis=1)
 
     else:
-        res['short'] = np.nanstd(nan_short, axis=-1)
-        res['long'] = np.nanstd(nan_long, axis=(1, 2))
+        res['short'] = np.nanstd(nan_short, axis=1)
+        res['long'] = np.nanstd(nan_long_noncal, axis=(1, 2))
+        res['long_by_source'] = np.nanstd(nan_long, axis=1)
 
     return res
 
