@@ -208,15 +208,19 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         timer.start("Calculating timing dependence.")
 
         if config.timing.sep_delay:
+            logger.info("Fitting HPF and LPF timing correction separately.")
             files = timing_files_hpf
             files2 = timing_files_lpf
         else:
             files2 = None
             if config.timing.hpf_delay:
+                logger.info("Using HPF timing correction for delay.")
                 files = timing_files_hpf
             elif config.timing.lpf_delay:
+                logger.info("Using LPF timing correction for delay.")
                 files = timing_files_lpf
             else:
+                logger.info("Using full timing correction for delay.")
                 files = timing_files
 
         kwargs = {}
@@ -497,8 +501,10 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
             # Redefine axes
             bdata = StabilityData()
-            bdata.create_dataset("source", data=sdata["source"][tind])
-            bdata.create_dataset("csd", data=sdata["csd"][tind])
+            for dset in ["source", "csd", "calibrator", "calibrator_time"]:
+                bdata.create_dataset(dset, data=sdata[dset][tind])
+
+            bdata.create_index_map("time", sdata.index_map["time"][tind])
             bdata.create_index_map("input", sdata.index_map["input"][:])
             bdata.attrs["calibrator"] = sdata.attrs.get("calibrator", "CYG_A")
 

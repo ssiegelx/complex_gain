@@ -621,12 +621,12 @@ def get_timing_correction(sdata, files, set_reference=False, transit_window=2400
         if return_amp:
             scale = 1.0 if tc.amp_to_delay is None else tc.amp_to_delay
             print("Scaling amplitude by %0.2f" % scale)
-            ns[:, this_transit] = scale * tc.get_alpha(timestamp, **interp_kwargs)
-            ns_cal[:, this_transit] = scale * tc.get_alpha(timestamp_cal, **interp_kwargs)
+            ns[:, this_transit], _ = scale * tc.get_alpha(timestamp, **interp_kwargs)
+            ns_cal[:, this_transit], _ = scale * tc.get_alpha(timestamp_cal, **interp_kwargs)
 
         else:
-            ns[:, this_transit] = tc.get_tau(timestamp, ignore_amp=ignore_amp, **interp_kwargs)
-            ns_cal[:, this_transit] = tc.get_tau(timestamp_cal, ignore_amp=ignore_amp, **interp_kwargs)
+            ns[:, this_transit], _ = tc.get_tau(timestamp, ignore_amp=ignore_amp, **interp_kwargs)
+            ns_cal[:, this_transit], _ = tc.get_tau(timestamp_cal, ignore_amp=ignore_amp, **interp_kwargs)
 
         ns_flag[:, this_transit] = True
 
