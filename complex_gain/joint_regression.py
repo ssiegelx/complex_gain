@@ -533,29 +533,40 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
 def write_stat(sdata, stat, fitter, output_filename):
 
-    axis = {'short': np.array(['input'], dtype=np.string_),
-            'long': np.array(['input'], dtype=np.string_),
-            'mu': np.array(['input', 'csd', 'source'], dtype=np.string_),
-            'mu_flag': np.array(['input', 'csd', 'source'], dtype=np.string_)}
+    axis = {'time_diff': ['source'],
+            'short': ['input'],
+            'long': ['input'],
+            'long_by_source': ['input', 'source'],
+            'num_short': ['input'],
+            'num_long': ['input'],
+            'num_long_by_source': ['input', 'source'],
+            'mu': ['input', 'csd', 'source'],
+            'mu_flag': ['input', 'csd', 'source']}
 
     # Save to hdf5 file
     with h5py.File(output_filename, 'w') as handler:
         for key, val in stat.iteritems():
             grp = handler.create_group('_'.join(key))
             for kk, vv in val.iteritems():
-                dset = grp.create_dataset(kk, data=vv)
-                dset.attrs['axis'] = axis[kk]
+                if kk in axis:
+                    dset = grp.create_dataset(kk, data=vv)
+                    dset.attrs['axis'] = np.array(axis[kk], dtype=np.string_)
+
+            if 'index_map' not in handler:
+                index_map = handler.create_group('index_map')
+
+                index_map.create_dataset('source',
+                                         data=np.array(val['source_pair'][:], dtype=np.string_))
+
+                index_map.create_dataset('csd',
+                                         data=val['csd'][:])
+
+                inp_dtype = [('chan_id', '<u2'), ('correlator_input', '<S32')]
+                index_map.create_dataset('input',
+                                         data=np.array(val['input'][:], dtype=inp_dtype))
 
         dset = handler.create_dataset('number', data=fitter.number)
         dset.attrs['axis'] = np.array(['input'], dtype=np.string_)
-
-        grp = handler.create_group('index_map')
-        grp.create_dataset('source', data=np.unique(sdata['source']).astype(np.string_))
-        grp.create_dataset('csd', data=np.unique(sdata['csd']))
-
-        inputs = np.array(sdata.index_map['input'][:],
-                          dtype=[('chan_id', '<u2'), ('correlator_input', '<S32')])
-        grp.create_dataset('input', data=inputs)
 
 
 def write_coeff(sdata, fitter, output_filename):
