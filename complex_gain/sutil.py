@@ -971,6 +971,14 @@ def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None)
         med = np.nanmedian(nan_short, axis=1)
         res['short'] = 1.48625 * np.nanmedian(np.abs(nan_short - med[:, np.newaxis]), axis=1)
 
+        res['short_by_source'] = np.full((ninput, nsources), np.nan, dtype=np.float32)
+        for ss, (cal, src) in enumerate(usources):
+            this_time = np.flatnonzero((axes['source'][:] == src) & (axes['calibrator'][:] == cal))
+            if this_time.size > 0:
+                med = np.nanmedian(nan_short[:, this_time], axis=1)
+                res['short_by_source'][:, ss] = 1.48625 * np.nanmedian(
+                                    np.abs(nan_short[:, this_time] - med[:, np.newaxis]), axis=1)
+
         med = np.nanmedian(nan_long_noncal, axis=(1, 2))
         res['long'] = 1.48625 * np.nanmedian(np.abs(nan_long_noncal - med[:, np.newaxis, np.newaxis]), axis=(1, 2))
 
@@ -979,7 +987,15 @@ def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None)
 
     else:
         res['short'] = np.nanstd(nan_short, axis=1)
+
+        res['short_by_source'] = np.full((ninput, nsources), np.nan, dtype=np.float32)
+        for ss, (cal, src) in enumerate(usources):
+            this_time = np.flatnonzero((axes['source'][:] == src) & (axes['calibrator'][:] == cal))
+            if this_time.size > 0:
+                res['short_by_source'][:, ss] = np.nanstd(nan_short[:, this_time], axis=1)
+
         res['long'] = np.nanstd(nan_long_noncal, axis=(1, 2))
+
         res['long_by_source'] = np.nanstd(nan_long, axis=1)
 
     return res
