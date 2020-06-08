@@ -541,9 +541,11 @@ def write_stat(sdata, stat, fitter, output_filename):
 
     axis = {'time_diff': ['source'],
             'short': ['input'],
+            'short_by_source': ['input', 'source'],
             'long': ['input'],
             'long_by_source': ['input', 'source'],
             'num_short': ['input'],
+            'num_short_by_source': ['input', 'source'],
             'num_long': ['input'],
             'num_long_by_source': ['input', 'source'],
             'mu': ['input', 'csd', 'source'],
