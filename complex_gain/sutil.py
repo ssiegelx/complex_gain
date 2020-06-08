@@ -478,13 +478,13 @@ def evaluate_derivative(timestamp, temp, flag, order=2):
     return deriv
 
 
-def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False,
+def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False, include_offset=False,
                            sensor='weather_outTemp', temp_field='temp', is_cable_monitor=False, use_alpha=False,
                            **interp_kwargs):
 
     # Some hardcoded parameters
     unique_source = np.unique(sdata['source'][:])
-    nfeature = 1 + unique_source.size
+    nfeature = 1 + int(include_offset) + unique_source.size
 
     scale = 1e12 * 1e-5 / speed_of_light
 
@@ -535,15 +535,17 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
 
     ix = np.zeros((sdata.ntime, nfeature), dtype=np.float32)
 
-    # ix[:, 0] = scale * ecoord(sdata['calibrator_dec'][:], ha=0.0)
-
     ix[:, 0] = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) * temp_func(sdata.time[:]) -
                         ecoord(sdata['calibrator_dec'][:], ha=0.0) * temp_func(sdata['calibrator_time'][:]))
 
-    hdep = scale * ecoord(sdata['dec'][:], ha=sdata['ha'][:])
+    hdep = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) - ecoord(sdata['dec'][:], ha=0.0))
     for ss, src in enumerate(unique_source):
         this_source = sdata['source'][:] == src
         ix[:, 1+ss] = np.where(this_source, hdep, 0.0)
+
+    if include_offset:
+        print("Fitting ns distance for nominal temperature.")
+        ix[:, -1] = scale * (ecoord(sdata['dec'][:], ha=0.0) - ecoord(sdata['calibrator_dec'][:], ha=0.0))
 
     # Determine NS baseline distance and reference appropriately
     feedpos = tools.get_feed_positions(inputmap)

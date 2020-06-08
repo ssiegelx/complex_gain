@@ -306,7 +306,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         else:
             kwargs['phase_ref'] = config.data.phase_ref
 
-        for key in ['sensor', 'temp_field', 'sep_cyl']:
+        for key in ['sensor', 'temp_field', 'sep_cyl', 'include_offset']:
             if key in config.ns_distance:
                 kwargs[key] = config.ns_distance[key]
 
