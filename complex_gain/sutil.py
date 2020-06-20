@@ -17,6 +17,10 @@ from ch_util import cal_utils
 
 from complex_gain import kzfilt
 
+CRATES_PER_HUT = 4
+INPUTS_PER_HUT = 1024
+INPUTS_PER_CYL = 256
+
 class TempRegression(object):
 
     def __init__(self, x, data, flag=None, time_flag=None):
@@ -229,9 +233,18 @@ class JointTempRegression(TempRegression):
 
         self.coeff_name = coeff_name
 
+        # Determine what groups actually contain data
+        self._good_input = np.flatnonzero(np.any(flag, axis=1))
+        self._with_data = np.any((x != 0.0) & flag[:, :, np.newaxis], axis=1)
+
+        empty_features = np.flatnonzero(~np.any(self._with_data, axis=0))
+        if empty_features.size > 0:
+            raise RuntimeError("The following features are empty: %s" %
+                               ', '.join([self.coeff_name[ff] for ff in empty_features]))
+
         # Determine correlated groups
-        self._groups = groups
-        uniq_groups = [np.unique(groups[:, ff]) for ff in range(nfeature)]
+        self._groups = np.zeros_like(groups) - 1
+        uniq_groups = [np.unique(groups[np.flatnonzero(self._with_data[:, ff]), ff]) for ff in range(nfeature)]
         ncoeff = [ug.size for ug in uniq_groups]
 
         self._coeff_bounds = np.concatenate(([0], np.cumsum(ncoeff)))
@@ -266,7 +279,7 @@ class JointTempRegression(TempRegression):
                 self.nintercept = 1
                 cgroups = [(ntime, slice(None))]
 
-            for ii in range(ninput):
+            for ii in self._good_input:
                 for ng, cg in cgroups:
                     y += [1.0] * ng
                     row += list(flat_index[ii, cg])
@@ -278,9 +291,9 @@ class JointTempRegression(TempRegression):
         row = np.array(row)
         col = np.array(col)
 
-        nparam = self.ncoeff + self.nintercept * ninput
+        nparam = self.ncoeff + self.nintercept * self._good_input.size
         self.log.info("%d parameters in total.  (%d coefficients, %d x %d intercepts)" %
-                      (nparam, self.ncoeff, self.nintercept, ninput))
+                      (nparam, self.ncoeff, self.nintercept, self._good_input.size))
 
         self._x = scipy.sparse.coo_matrix((y, (row, col)), shape=(ninput * ntime, nparam))
 
@@ -358,13 +371,13 @@ class JointTempRegression(TempRegression):
         self.coeff = np.zeros(self.N + (self.nfeature,), dtype=np.float32)
         for ff in range(self.nfeature):
             aa, bb = self._coeff_bounds[ff], self._coeff_bounds[ff+1]
-            self.coeff[..., ff] = coeff[aa:bb][self._groups[:, ff]]
+            with_data = np.flatnonzero(self._groups[:, ff] >= 0)
+            self.coeff[with_data, ff] = coeff[aa:bb][self._groups[with_data, ff]]
 
         # Save intercept
+        self.intercept = np.zeros(self.N + (self.nintercept or 1,), dtype=np.float32)
         if self.fit_intercept:
-            self.intercept = coeff[self.ncoeff:].reshape(self.N + (self.nintercept,))
-        else:
-            self.intercept = np.zeros(self.N + (1,), dtype=np.float32)
+            self.intercept[self._good_input, :] = coeff[self.ncoeff:].reshape(self._good_input.size, self.nintercept)
 
         # Compute number of data points that were fit, as well as the model and residual
         self.number = np.sum(self._flag.astype(np.int), axis=-1)
@@ -407,6 +420,42 @@ class JointTempRegression(TempRegression):
         return description, np.unique(index)
 
 
+def construct_delay_template(omega, phase, flag, min_num_freq_for_delay_fit=100):
+
+    nfreq, ninput, ntransit = phase.shape
+
+    tau = np.zeros((ninput, ntransit), dtype=np.float32)
+    tau_flag = np.zeros((ninput, ntransit), dtype=np.bool)
+    tau_err = np.zeros((ninput, ntransit), dtype=np.float32)
+
+    for tt in range(ntransit):
+        for ii in range(ninput):
+
+            fflag = flag[:, ii, tt]
+
+            if np.sum(fflag, dtype=np.int) > min_num_freq_for_delay_fit:
+
+                x = omega[fflag]
+                y = phase[fflag, ii, tt]
+
+                try:
+                    huber = HuberRegressor(fit_intercept=False).fit(x.reshape(-1, 1), y)
+
+                except Exception:
+                    continue
+
+                else:
+                    tau[ii, tt] = huber.coef_[0]
+                    tau_flag[ii, tt] = True
+
+                    resid = y - huber.coef_[0] * x
+                    not_outlier = np.flatnonzero(np.logical_not(huber.outliers_[:]))
+                    tau_err[ii, tt] = np.sqrt(np.var(resid[not_outlier], ddof=1) * tools.invert_no_zero(
+                                              np.sum((x[not_outlier] - np.mean(x[not_outlier]))**2)))
+
+    return tau, tau_flag, tau_err
+
+
 def get_pol(sdata, inputmap):
 
     good_input = np.flatnonzero(np.any(sdata.flags['tau'][:], axis=-1))
@@ -417,6 +466,16 @@ def get_pol(sdata, inputmap):
     pol_y = np.array([ii for ii, inp in enumerate(inputmap) if tools.is_chime(inp) and
                                                                tools.is_array_y(inp) and
                                                                (ii in good_input)])
+
+    return [pol_x, pol_y]
+
+
+def get_pol_with_bad_inputs(inputmap, inputs_per_cyl=INPUTS_PER_CYL):
+
+    idd = (np.array([inp.id for inp in inputmap]) // inputs_per_cyl) % 2
+
+    pol_x = np.flatnonzero(idd == 1)
+    pol_y = np.flatnonzero(idd == 0)
 
     return [pol_x, pol_y]
 
@@ -478,13 +537,15 @@ def evaluate_derivative(timestamp, temp, flag, order=2):
     return deriv
 
 
-def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False, include_offset=False,
-                           sensor='weather_outTemp', temp_field='temp', is_cable_monitor=False, use_alpha=False,
+def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False,
+                           include_offset=False, include_ha=False, sensor='weather_outTemp', temp_field='temp',
+                           is_cable_monitor=False, use_alpha=False,
                            **interp_kwargs):
 
     # Some hardcoded parameters
     unique_source = np.unique(sdata['source'][:])
-    nfeature = 1 + int(include_offset) + unique_source.size
+    print("Unique sources: %s" % str(unique_source))
+    nfeature = 1 + int(include_offset) + int(include_ha) * (1 + unique_source.size)
 
     scale = 1e12 * 1e-5 / speed_of_light
 
@@ -535,13 +596,18 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
 
     ix = np.zeros((sdata.ntime, nfeature), dtype=np.float32)
 
-    ix[:, 0] = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) * temp_func(sdata.time[:]) -
+    ix[:, 0] = scale * (ecoord(sdata['dec'][:], ha=0.0) * temp_func(sdata.time[:]) -
                         ecoord(sdata['calibrator_dec'][:], ha=0.0) * temp_func(sdata['calibrator_time'][:]))
 
-    hdep = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) - ecoord(sdata['dec'][:], ha=0.0))
-    for ss, src in enumerate(unique_source):
-        this_source = sdata['source'][:] == src
-        ix[:, 1+ss] = np.where(this_source, hdep, 0.0)
+    if include_ha:
+        print("Fitting for ns_distance hour angle dependence.")
+        ix[:, 1] = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) -
+                            ecoord(sdata['dec'][:], ha=0.0)) * temp_func(sdata.time[:])
+
+        hdep = scale * (ecoord(sdata['dec'][:], ha=sdata['ha'][:]) - ecoord(sdata['dec'][:], ha=0.0))
+        for ss, src in enumerate(unique_source):
+            this_source = sdata['source'][:] == src
+            ix[:, 2+ss] = np.where(this_source, hdep, 0.0)
 
     if include_offset:
         print("Fitting ns distance for nominal temperature.")
@@ -572,10 +638,12 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
     # Specify a grouping (assumes all inputs are fit simultaneously)
     grouping = np.zeros((sdata.index_map['input'].size, nfeature), dtype=np.int)
     if sep_cyl:
-        is_chime = np.array([tools.is_chime(inp) for inp in inputmap])
-        ucyl, cylmap = np.unique([inp.cyl if is_chime[ii] else 100 for ii, inp in enumerate(inputmap)],
-                                  return_inverse=True)
-        grouping[is_chime, :] = cylmap[is_chime, np.newaxis]
+        # is_chime = np.array([tools.is_chime(inp) for inp in inputmap])
+        # ucyl, cylmap = np.unique([inp.cyl if is_chime[ii] else 100 for ii, inp in enumerate(inputmap)],
+        #                           return_inverse=True)
+        #grouping[is_chime, :] = cylmap[is_chime, np.newaxis]
+        for ff in range(nfeature):
+            grouping[:, ff] = np.arange(sdata.index_map['input'].size, dtype=np.int) // 512
 
     return xdist, xdist_flag, grouping
 
@@ -655,12 +723,8 @@ def get_timing_correction(sdata, files, set_reference=False, transit_window=2400
 def timing_dependence(sdata, tfiles, inputmap, ns_ref=[7, 5], inter_cmn=False,
                       fit_amp=False, ref_amp=False, cmn_amp=True, afiles=None):
 
-    # Some hardcoded parameters
-    crates_per_hut = 4
-    inputs_per_hut = 1024
-
     # Some necessary parameters
-    pol = get_pol(sdata, inputmap)
+    pol = get_pol_with_bad_inputs(inputmap, inputs_per_cyl=INPUTS_PER_CYL)
 
     ninput, ntime = sdata['tau'].shape
     dtype = sdata['tau'].dtype
@@ -678,8 +742,8 @@ def timing_dependence(sdata, tfiles, inputmap, ns_ref=[7, 5], inter_cmn=False,
                                                          ignore_amp=True, return_amp=True)
 
         if cmn_amp:
-            cmn_groups = [np.flatnonzero(ns_inputs['chan_id'] < inputs_per_hut),
-                          np.flatnonzero(ns_inputs['chan_id'] >= inputs_per_hut)]
+            cmn_groups = [np.flatnonzero(ns_inputs['chan_id'] < INPUTS_PER_HUT),
+                          np.flatnonzero(ns_inputs['chan_id'] >= INPUTS_PER_HUT)]
             ngroup = len(cmn_groups)
 
             ns_cmn_amp = np.zeros((ngroup, ntime), dtype=ns_amp.dtype)
@@ -735,11 +799,11 @@ def timing_dependence(sdata, tfiles, inputmap, ns_ref=[7, 5], inter_cmn=False,
                 xtiming[ipol, :, nns:] = np.transpose(ns_amp)[np.newaxis, :, :]
                 xtiming_flag[ipol, :, nns:] = np.transpose(ns_flag)[np.newaxis, :, :]
 
-        ns_diff_hut = np.flatnonzero((crate_ns // crates_per_hut) != (crate_ns[iref] // crates_per_hut))
-        ns_same_hut = np.flatnonzero((crate_ns // crates_per_hut) == (crate_ns[iref] // crates_per_hut))
+        ns_diff_hut = np.flatnonzero((crate_ns // CRATES_PER_HUT) != (crate_ns[iref] // CRATES_PER_HUT))
+        ns_same_hut = np.flatnonzero((crate_ns // CRATES_PER_HUT) == (crate_ns[iref] // CRATES_PER_HUT))
 
-        is_intra = ipol[np.flatnonzero((crate_index[ipol] // crates_per_hut) == (crate_ns[iref] // crates_per_hut))]
-        is_inter = ipol[np.flatnonzero((crate_index[ipol] // crates_per_hut) != (crate_ns[iref] // crates_per_hut))]
+        is_intra = ipol[np.flatnonzero((crate_index[ipol] // CRATES_PER_HUT) == (crate_ns[iref] // CRATES_PER_HUT))]
+        is_inter = ipol[np.flatnonzero((crate_index[ipol] // CRATES_PER_HUT) != (crate_ns[iref] // CRATES_PER_HUT))]
 
         for ndh in ns_diff_hut:
             xtiming[is_intra, :, ndh] = 0.0
@@ -827,7 +891,8 @@ def cable_monitor_dependence(sdata, tdata, include_diff=False, **interp_kwargs):
     return tdep, tflag, tgroup
 
 
-def temperature_dependence(sdata, tdata, sensors, field='temp', deriv=0, **interp_kwargs):
+def temperature_dependence(sdata, tdata, sensors, field='temp', deriv=0,
+                           inputmap=None, phase_ref=None, check_hut=False, **interp_kwargs):
 
     nsensors = len(sensors)
 
@@ -837,32 +902,55 @@ def temperature_dependence(sdata, tdata, sensors, field='temp', deriv=0, **inter
     ninput, ntime = sdata['tau'].shape
     dtype = sdata['tau'].dtype
 
-    # Use lna temperature
+    if (inputmap is not None) and (phase_ref is not None):
+
+        pol = get_pol_with_bad_inputs(inputmap, inputs_per_cyl=INPUTS_PER_CYL)
+
+        is_inter = np.zeros(ninput, dtype=np.int)
+        for ipol, iref in zip(pol, phase_ref):
+            is_inter[ipol] = (ipol // INPUTS_PER_HUT) != np.mean(np.atleast_1d(iref) // INPUTS_PER_HUT)
+
+        huts = {'wrh': 1.0 - (np.arange(ninput) // INPUTS_PER_HUT) * 2.0,
+                'erh': -1.0 + (np.arange(ninput) // INPUTS_PER_HUT) * 2.0}
+
+    elif check_hut:
+        raise RuntimeError("Must provide inputmap and phase reference if using hut dependent temperatures.")
+
     tdep = np.zeros((ninput, ntime, nsensors), dtype=dtype)
     tflag = np.zeros((ninput, ntime, nsensors), dtype=np.bool)
     tgroup = np.zeros((ninput, nsensors), dtype=np.int)
+    tname = ['temp%d' % tt for tt in range(nsensors)]
 
     for tt, (name, grp) in enumerate(zip(sensors, field)):
 
         if name == 'lna':
             temp_series, temp_flag = mean_lna_temp(tdata, field=grp)
+            tname[tt] = name
 
         else:
             tind = tdata.search_sensors(name)[0]
             temp_series = tdata[grp][tind, :]
             temp_flag = tdata['flag'][tind, :]
+            tname[tt] = tdata.sensor[tind]
 
         if deriv > 0:
             temp_series = evaluate_derivative(tdata.time[:], temp_series, temp_flag, order=deriv)
+            tname[tt] += "_deriv%d" % deriv
 
         temp_func = interp1d(tdata.time, temp_series, axis=-1, **interp_kwargs)
         flag_func = interp1d(tdata.time, temp_flag.astype(np.float32), axis=-1, **interp_kwargs)
 
         tdep[:, :, tt] = (temp_func(sdata.time[:]) - temp_func(sdata['calibrator_time'][:]))[np.newaxis, :]
         tflag[:, :, tt] = ((flag_func(sdata.time[:]) == 1.0) & (flag_func(sdata['calibrator_time'][:]) == 1.0))[np.newaxis, :]
-        tgroup[:, tt] = np.arange(ninput)
 
-    return tdep, tflag, tgroup
+        if check_hut and (name.startswith('wrh') or name.startswith('erh')):
+            hut_name = name.split('_')[0]
+            tdep[:, :, tt] *= (is_inter * huts[hut_name])[:, np.newaxis]
+            tgroup[:, tt] = is_inter
+        else:
+            tgroup[:, tt] = np.arange(ninput)
+
+    return tdep, tflag, tgroup, tname
 
 
 def mean_subtract(axes, dataset, flag, use_calibrator=False):
@@ -1005,6 +1093,38 @@ def short_long_stat(axes, dataset, flag, stat='mad', ref_common=False, pol=None)
         res['long_by_source'] = np.nanstd(nan_long, axis=1)
 
     return res
+
+
+def compute_common_mode(y, flag, groups, median=True):
+
+    nfreq, ninput, ntransit = y.shape
+    ngroup = len(groups)
+
+    shp = (nfreq, ngroup, ntransit)
+
+    flg = np.zeros(shp, dtype=np.bool)
+    cmn = np.zeros(shp, dtype=y.dtype)
+
+    for ff in range(nfreq):
+
+        for tt in range(ntransit):
+
+            for gg, igroup in enumerate(groups):
+
+                this_flag = flag[ff, igroup, tt].astype(np.float32)
+                this_y = y[ff, igroup, tt]
+
+                if np.any(this_flag):
+
+                    flg[ff, gg, tt] = True
+
+                    if median:
+                        cmn[ff, gg, tt] = wq.median(this_y, this_flag)
+
+                    else:
+                        cmn[ff, gg, tt] = np.sum(this_flag * this_y) * tools.invert_no_zero(np.sum(this_flag))
+
+    return cmn, flg
 
 
 def apply_kz_lpf(x, y, w=20.0, k=4):

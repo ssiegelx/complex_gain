@@ -46,15 +46,15 @@ log.setup_logging(DEFAULT_LOGGING)
 # Define temperatures to extract
 ###################################################
 
-# SPEC = {'ext_sensor_value': {'labels': ['hut', 'device'], 'ignore': ['Humidity'], 'scale': 0.10},
-#         'weather_outTemp': {},
-#         'fpga_motherboard_temp': {'labels':  ['sensor', 'crate_number', 'slot']},
-#         'fpga_backplane_temp': {'labels':  ['crate_number', 'sensor']},
-#         'chime_lna_temperature': {'labels': ['sensor_id']},
-#         'fpga_power_supply_power': {'labels': ['name']}}
+SPEC = {'ext_sensor_value': {'labels': ['hut', 'device'], 'ignore': ['Humidity'], 'scale': 0.10},
+        'weather_outTemp': {},
+        'fpga_motherboard_temp': {'labels':  ['sensor', 'crate_number', 'slot']},
+        'fpga_backplane_temp': {'labels':  ['crate_number', 'sensor']},
+        'chime_lna_temperature': {'labels': ['sensor_id']},
+        'fpga_power_supply_power': {'labels': ['name']}}
 
-SPEC = {'fpga_mezzanine_voltage': {'labels':  ['sensor', 'crate_number', 'slot', 'mezzanine'], 'prefix': True},
-        'fpga_mezzanine_current': {'labels':  ['sensor', 'crate_number', 'slot', 'mezzanine'], 'prefix': True}}
+# SPEC = {'fpga_mezzanine_voltage': {'labels':  ['sensor', 'crate_number', 'slot', 'mezzanine'], 'prefix': True},
+#         'fpga_mezzanine_current': {'labels':  ['sensor', 'crate_number', 'slot', 'mezzanine'], 'prefix': True}}
 
 
 ###################################################

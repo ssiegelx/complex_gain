@@ -71,26 +71,40 @@ class StabilityData(andata.BaseData):
         return self.index_map['freq']
 
 
-def _concatenate(xdist, xtemp, xcable, xtiming):
+def _concatenate(xdist, xtemp, xcable, xtiming,
+                 name_xdist=None, name_xtemp=None,
+                 name_xcable=None, name_xtiming=None):
 
     combine = []
     name = []
 
     if xdist is not None:
         combine.append(xdist)
-        name += ['dist%d' % dd for dd in range(xdist.shape[-1])]
+        if name_xdist is not None and len(name_xdist) == xdist.shape[-1]:
+            name += list(name_xdist)
+        else:
+            name += ['dist%d' % dd for dd in range(xdist.shape[-1])]
 
     if xtemp is not None:
         combine.append(xtemp)
-        name += ['temp%d' % tt for tt in range(xtemp.shape[-1])]
+        if name_xtemp is not None and len(name_xtemp) == xtemp.shape[-1]:
+            name += list(name_xtemp)
+        else:
+            name += ['temp%d' % tt for tt in range(xtemp.shape[-1])]
 
     if xcable is not None:
         combine.append(xcable)
-        name += ['cable%d' % tt for tt in range(xcable.shape[-1])]
+        if name_xcable is not None and len(name_xcable) == xcable.shape[-1]:
+            name += list(name_xcable)
+        else:
+            name += ['cable%d' % tt for tt in range(xcable.shape[-1])]
 
     if xtiming is not None:
         combine.append(xtiming)
-        name += ['time%d' % tt for tt in range(xtiming.shape[-1])]
+        if name_xtiming is not None and len(name_xtiming) == xtiming.shape[-1]:
+            name += list(name_xtiming)
+        else:
+            name += ['time%d' % tt for tt in range(xtiming.shape[-1])]
 
     if combine:
         x = np.concatenate(tuple(combine), axis=-1)
@@ -175,6 +189,11 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
     npol = len(pol)
 
     mezz_index, crate_index = sutil.get_mezz_and_crate(sdata, inputmap)
+
+    if config.mezz_ref.enable:
+        phase_ref = [ipol[mezz_index[ipol] == iref] for ipol, iref in zip(pol, config.mezz_ref.mezz)]
+    else:
+        phase_ref = config.data.phase_ref
 
     # Load timing
     if config.timing.enable:
@@ -301,12 +320,9 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         timer.start("Calculating NS distance dependence.")
 
         kwargs = {}
-        if config.mezz_ref.enable:
-            kwargs['phase_ref'] = [ipol[mezz_index[ipol] == iref] for ipol, iref in zip(pol, config.mezz_ref.mezz)]
-        else:
-            kwargs['phase_ref'] = config.data.phase_ref
+        kwargs['phase_ref'] = phase_ref
 
-        for key in ['sensor', 'temp_field', 'sep_cyl', 'include_offset']:
+        for key in ['sensor', 'temp_field', 'sep_cyl', 'include_offset', 'include_ha']:
             if key in config.ns_distance:
                 kwargs[key] = config.ns_distance[key]
 
@@ -344,20 +360,26 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         timer.start("Calculating temperature dependence.")
 
-        xtemp, xtemp_flag, xtemp_group = sutil.temperature_dependence(sdata, tdata, config.temperature.sensor,
-                                                                      field=config.temperature.temp_field)
+        xtemp, xtemp_flag, xtemp_group, xtemp_name = sutil.temperature_dependence(sdata, tdata, config.temperature.sensor,
+                                                                                  field=config.temperature.temp_field,
+                                                                                  inputmap=inputmap,
+                                                                                  phase_ref=phase_ref,
+                                                                                  check_hut=config.temperature.check_hut)
 
         if (config.temperature.deriv is not None) and (config.temperature.deriv > 0):
 
             for dd in range(1, config.temperature.deriv+1):
 
-                d_xtemp, d_xtemp_flag, d_xtemp_group = sutil.temperature_dependence(sdata, tdata, config.temperature.sensor,
-                                                                                    field=config.temperature.temp_field,
-                                                                                    deriv=dd)
+                d_xtemp, d_xtemp_flag, d_xtemp_group, d_xtemp_name = sutil.temperature_dependence(sdata, tdata, config.temperature.sensor,
+                                                                                                  field=config.temperature.temp_field,
+                                                                                                  deriv=dd, inputmap=inputmap,
+                                                                                                  phase_ref=phase_ref,
+                                                                                                  check_hut=config.temperature.check_hut)
 
                 xtemp = np.concatenate((xtemp, d_xtemp), axis=-1)
                 xtemp_flag = xnp.concatenate((xtemp_flag, d_xtemp_flag), axis=-1)
                 xtemp_group = np.concatenate((xtemp_group, d_xtemp_group), axis=-1)
+                xtemp_name += d_xtemp_name
 
         timer.stop()
 
@@ -367,7 +389,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         xtemp_group = None
 
     # Combine into single feature matrix
-    x, coeff_name = _concatenate(xdist, xtemp, xcable, xtiming)
+    x, coeff_name = _concatenate(xdist, xtemp, xcable, xtiming, name_xtemp=xtemp_name)
 
     x_group, _ = _concatenate(xdist_group, xtemp_group, xcable_group, xtiming_group)
 
@@ -390,21 +412,29 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         sdata.save(ofile, mode='w')
 
     # Subtract mean
-    timer.start("Subtracting mean value.")
+    if config.mean_subtract:
+        timer.start("Subtracting mean value.")
 
-    tau, mu_tau, mu_tau_flag = sutil.mean_subtract(sdata, sdata['tau'][:], x_flag, use_calibrator=True)
+        tau, mu_tau, mu_tau_flag = sutil.mean_subtract(sdata, sdata['tau'][:], x_flag, use_calibrator=True)
 
-    mu_x = np.zeros(mu_tau.shape + (nfeature,), dtype=x.dtype)
-    mu_x_flag = np.zeros(mu_tau.shape + (nfeature,), dtype=np.bool)
-    x_no_mu = x.copy()
-    for ff in range(nfeature):
-        x_no_mu[..., ff], mu_x[..., ff], mu_x_flag[..., ff] = sutil.mean_subtract(sdata, x[:, :, ff], x_flag,
-                                                                                  use_calibrator=True)
-    timer.stop()
+        mu_x = np.zeros(mu_tau.shape + (nfeature,), dtype=x.dtype)
+        mu_x_flag = np.zeros(mu_tau.shape + (nfeature,), dtype=np.bool)
+        x_no_mu = x.copy()
+        for ff in range(nfeature):
+            x_no_mu[..., ff], mu_x[..., ff], mu_x_flag[..., ff] = sutil.mean_subtract(sdata, x[:, :, ff], x_flag,
+                                                                                      use_calibrator=True)
+        timer.stop()
+
+    else:
+        x_no_mu = x.copy()
+        tau = sdata['tau'][:].copy()
 
     # Calculate unique days
     csd_uniq, bmap = np.unique(sdata['csd'][:], return_inverse=True)
     ncsd = csd_uniq.size
+
+    # Prepare unique sources
+    classification = np.char.add(np.char.add(sdata['calibrator'][:], '/'), sdata['source'][:])
 
     # If requested, set up boot strapping
     if config.bootstrap.enable:
@@ -472,7 +502,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
         timer.start("Setting up fit.  Bootstrap %d of %d." % (bb+1, nboot))
         fitter = sutil.JointTempRegression(x_no_mu[:, tind, :], tau[:, tind], x_group, flag=x_flag[:, tind],
-                                           classification=sdata['source'][:],
+                                           classification=classification[tind],
                                            coeff_name=coeff_name)
         timer.stop()
 

@@ -123,6 +123,7 @@ joint_regression:
             - "temp"
             - "temp_lpf"
         enable: True
+        check_hut: False
         temp_field: "temp_lpf"
         sensor:
             - 'lna'
@@ -164,11 +165,14 @@ joint_regression:
         enable: True
         sep_cyl: False
         include_offset: False
+        include_ha: False
         use_cable_monitor: False
         use_alpha: False
         temp_field: "temp_lpf"
         sensor: "weather_outTemp"
         deriv: 0
+
+    mean_subtract: False
 
     fit_options:
         sparse: False

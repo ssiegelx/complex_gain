@@ -7,7 +7,6 @@ import h5py
 import scipy.interpolate
 import numpy as np
 import weighted as wq
-from sklearn.linear_model import HuberRegressor
 
 import wtl.log as log
 from wtl.namespace import NameSpace
@@ -23,7 +22,8 @@ from ch_util import finder
 from ch_pipeline.core import containers
 from ch_pipeline.analysis.flagging import daytime_flag
 
-from temps import TempData
+from complex_gain.temps import TempData
+from complex_gain.sutil import construct_delay_template, compute_common_mode
 
 
 ###################################################
@@ -72,67 +72,6 @@ def reorder_inputs(inputmap, inputs):
 
     return np.array(isort)
 
-
-def construct_delay_template(omega, phase, flag, min_num_freq_for_delay_fit=100):
-
-    nfreq, ninput, ntransit = phase.shape
-
-    tau = np.zeros((ninput, ntransit), dtype=np.float32)
-    tau_flag = np.zeros((ninput, ntransit), dtype=np.bool)
-
-    for tt in range(ntransit):
-        for ii in range(ninput):
-
-            fflag = flag[:, ii, tt]
-
-            if np.sum(fflag, dtype=np.int) > min_num_freq_for_delay_fit:
-
-                x = omega[fflag]
-                y = phase[fflag, ii, tt]
-
-                try:
-                    huber = HuberRegressor(fit_intercept=False).fit(x.reshape(-1, 1), y)
-
-                except Exception:
-                    continue
-
-                else:
-                    tau[ii, tt] = huber.coef_[0]
-                    tau_flag[ii, tt] = True
-
-    return tau, tau_flag
-
-
-def compute_common_mode(y, flag, groups, median=True):
-
-    nfreq, ninput, ntransit = y.shape
-    ngroup = len(groups)
-
-    shp = (nfreq, ngroup, ntransit)
-
-    flg = np.zeros(shp, dtype=np.bool)
-    cmn = np.zeros(shp, dtype=y.dtype)
-
-    for ff in range(nfreq):
-
-        for tt in range(ntransit):
-
-            for gg, igroup in enumerate(groups):
-
-                this_flag = flag[ff, igroup, tt].astype(np.float32)
-                this_y = y[ff, igroup, tt]
-
-                if np.any(this_flag):
-
-                    flg[ff, gg, tt] = True
-
-                    if median:
-                        cmn[ff, gg, tt] = wq.median(this_y, this_flag)
-
-                    else:
-                        cmn[ff, gg, tt] = np.sum(this_flag * this_y) * tools.invert_no_zero(np.sum(this_flag))
-
-    return cmn, flg
 
 ###################################################
 # main routine
@@ -615,7 +554,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         logger.info("Fitting delay template.")
         omega = timing.FREQ_TO_OMEGA * freq
 
-        tau, tau_flag = construct_delay_template(omega, phi, c_flag & flag,
+        tau, tau_flag, _ = construct_delay_template(omega, phi, c_flag & flag,
                                                  min_num_freq_for_delay_fit=config.min_num_freq_for_delay_fit)
 
         # Compute residuals
@@ -732,7 +671,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         logger.info("Fitting delay template.")
         omega = timing.FREQ_TO_OMEGA * freq
 
-        tau, tau_flag = construct_delay_template(omega, dphi, c_flag & flag,
+        tau, tau_flag, _ = construct_delay_template(omega, dphi, c_flag & flag,
                                                  min_num_freq_for_delay_fit=config.min_num_freq_for_delay_fit)
 
         # Compute residuals

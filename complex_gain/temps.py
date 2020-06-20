@@ -5,6 +5,9 @@ import numpy as np
 from ch_util import andata
 
 class TempData(andata.BaseData):
+    
+    convert_attribute_strings = False
+    convert_dataset_strings = False
 
     @property
     def sensor(self):
