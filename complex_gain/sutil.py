@@ -537,17 +537,18 @@ def evaluate_derivative(timestamp, temp, flag, order=2):
     return deriv
 
 
-def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False,
+def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, deriv=0, sep_cyl=False, sep_feed=False,
                            include_offset=False, include_ha=False, sensor='weather_outTemp', temp_field='temp',
                            is_cable_monitor=False, use_alpha=False,
                            **interp_kwargs):
 
-    # Some hardcoded parameters
     unique_source = np.unique(sdata['source'][:])
     print("Unique sources: %s" % str(unique_source))
     nfeature = 1 + int(include_offset) + int(include_ha) * (1 + unique_source.size)
 
     scale = 1e12 * 1e-5 / speed_of_light
+
+    ninput = sdata.index_map['input'].size
 
     # Interpolate the temperature to the times of measurement
     if is_cable_monitor:
@@ -636,14 +637,13 @@ def ns_distance_dependence(sdata, tdata, inputmap, phase_ref=None, params=None, 
                   np.repeat(True, xdist.shape[-1])[np.newaxis, np.newaxis, :])
 
     # Specify a grouping (assumes all inputs are fit simultaneously)
-    grouping = np.zeros((sdata.index_map['input'].size, nfeature), dtype=np.int)
+    grouping = np.zeros((ninput, nfeature), dtype=np.int)
     if sep_cyl:
-        # is_chime = np.array([tools.is_chime(inp) for inp in inputmap])
-        # ucyl, cylmap = np.unique([inp.cyl if is_chime[ii] else 100 for ii, inp in enumerate(inputmap)],
-        #                           return_inverse=True)
-        #grouping[is_chime, :] = cylmap[is_chime, np.newaxis]
         for ff in range(nfeature):
-            grouping[:, ff] = np.arange(sdata.index_map['input'].size, dtype=np.int) // 512
+            grouping[:, ff] = np.arange(ninput, dtype=np.int) // 512
+    elif sep_feed:
+        for ff in range(nfeature):
+            grouping[:, ff] = np.arange(ninput, dtype=np.int)
 
     return xdist, xdist_flag, grouping
 

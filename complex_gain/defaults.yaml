@@ -164,6 +164,7 @@ joint_regression:
     ns_distance:
         enable: True
         sep_cyl: False
+        sep_feed: False
         include_offset: False
         include_ha: False
         use_cable_monitor: False

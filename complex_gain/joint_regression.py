@@ -322,7 +322,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         kwargs = {}
         kwargs['phase_ref'] = phase_ref
 
-        for key in ['sensor', 'temp_field', 'sep_cyl', 'include_offset', 'include_ha']:
+        for key in ['sensor', 'temp_field', 'sep_cyl', 'sep_feed', 'include_offset', 'include_ha']:
             if key in config.ns_distance:
                 kwargs[key] = config.ns_distance[key]
 
