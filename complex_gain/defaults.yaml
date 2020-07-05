@@ -103,6 +103,8 @@ joint_regression:
         filename: "20190514_20191123_tau_short_timescales_processed_feed_ref_updated_flags.h5"
         phase_ref: [1408, 1152]
 
+    coeff:
+
     preliminary_save:
         enable: True
         filename: "20190514_20191123_tau_short_timescales_processed_mezz_ref_timing_added.h5"

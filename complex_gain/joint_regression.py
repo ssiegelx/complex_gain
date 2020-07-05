@@ -387,6 +387,7 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
         xtemp = None
         xtemp_flag = None
         xtemp_group = None
+        xtemp_name = None
 
     # Combine into single feature matrix
     x, coeff_name = _concatenate(xdist, xtemp, xcable, xtiming, name_xtemp=xtemp_name)
@@ -435,6 +436,13 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
 
     # Prepare unique sources
     classification = np.char.add(np.char.add(sdata['calibrator'][:], '/'), sdata['source'][:])
+
+    # If requested, load existing coefficients
+    if config.coeff is not None:
+        coeff = andata.BaseData.from_acq_h5(config.coeff)
+        evaluate_only = True
+    else:
+        evaluate_only = False
 
     # If requested, set up boot strapping
     if config.bootstrap.enable:
@@ -500,15 +508,28 @@ def main(config_file=None, logging_params=DEFAULT_LOGGING):
                      ephemeris.unix_to_datetime(np.max(sdata.time[tind[time_flag_stat]])).strftime("%Y-%m-%d"),
                      np.max(sdata['csd'][:][tind[time_flag_stat]])))
 
-        timer.start("Setting up fit.  Bootstrap %d of %d." % (bb+1, nboot))
-        fitter = sutil.JointTempRegression(x_no_mu[:, tind, :], tau[:, tind], x_group, flag=x_flag[:, tind],
-                                           classification=classification[tind],
-                                           coeff_name=coeff_name)
-        timer.stop()
+        if evaluate_only:
+            timer.start("Evaluating coefficients provided.")
+            fitter = sutil.JointTempEvaluation(x_no_mu[:, tind, :], tau[:, tind], coeff['coeff'][:],
+                                               flag=x_flag[:, tind],
+                                               coeff_name=coeff.index_map['feature'][:],
+                                               feature_name=coeff_name,
+                                               intercept=coeff['intercept'][:],
+                                               intercept_name=coeff.index_map['classification'][:],
+                                               classification=classification[tind])
+            timer.stop()
 
-        timer.start("Performing fit.  Bootstrap %d of %d." % (bb+1, nboot))
-        fitter.fit_temp(time_flag=time_flag_fit, **config.fit_options)
-        timer.stop()
+        else:
+            timer.start("Setting up fit.  Bootstrap %d of %d." % (bb+1, nboot))
+
+            fitter = sutil.JointTempRegression(x_no_mu[:, tind, :], tau[:, tind], x_group, flag=x_flag[:, tind],
+                                               classification=classification[tind],
+                                               coeff_name=coeff_name)
+            timer.stop()
+
+            timer.start("Performing fit.  Bootstrap %d of %d." % (bb+1, nboot))
+            fitter.fit_temp(time_flag=time_flag_fit, **config.fit_options)
+            timer.stop()
 
         # If bootstrapping, append counter to filename
         if config.bootstrap.enable:

@@ -201,8 +201,138 @@ class TempRegressionGroups(TempRegression):
         self.resid = self.data - self.model
 
 
+class JointTempBase(object):
 
-class JointTempRegression(TempRegression):
+    def refine_model(self, include):
+
+        all_names = []
+        for inc in include:
+
+            name, index = self._get_feature_index(inc)
+
+            if index.size > 0:
+
+                model = np.sum(self.coeff[:, np.newaxis, index] * self._base_x[:, :, index], axis=-1)
+
+                attr = '_'.join(['model', name])
+                setattr(self, attr, model)
+                all_names.append(attr)
+
+                attr = '_'.join(['resid', name])
+                setattr(self, attr, self.data - model)
+                all_names.append(attr)
+
+        return all_names
+
+    def _get_feature_index(self, include):
+
+        if not isinstance(include, (list, tuple)):
+            include = [include]
+
+        index = []
+        for inc in include:
+            index += [ff for ff, feat in enumerate(self.coeff_name) if feat.startswith(inc)]
+
+        description = '_'.join(include)
+
+        return description, np.unique(index)
+
+
+class JointTempEvaluation(JointTempBase):
+
+    def __init__(self, x, data, coeff, flag=None, coeff_name=None, feature_name=None,
+                 intercept=None, intercept_name=None, classification=None):
+
+        self.log = logging.getLogger(str(self))
+
+        # Parse input, ensure consistent shapes
+        self._time_flag = None
+        if flag is None:
+            flag = np.ones(data.shape, dtype=np.bool)
+
+        if x.ndim == 1:
+            x = x[:, np.newaxis]
+
+        if x.ndim != (data.ndim+1):
+            expand = tuple([None] * (data.ndim+1 - x.ndim) + [slice(None)] * x.ndim)
+            x = x[expand]
+
+        ninput, ntime = data.shape
+
+        self._base_x = x
+
+        # Save datasets to object
+        self._flag = flag
+        self.data = data
+
+        self.N = self.data.shape[:-1]
+        self.nsample = self.data.shape[-1]
+
+        # Match the coefficients to the features
+        ncoeff = coeff.shape[-1]
+        if coeff_name is None:
+            coeff_name = ['feature%d' % dd for dd in range(ncoeff)]
+        else:
+            coeff_name = list(coeff_name)
+
+        nfeature = x.shape[-1]
+        if feature_name is None:
+            feature_name = ['feature%d' % dd for dd in range(nfeature)]
+        else:
+            feature_name = list(feature_name)
+
+        imatch = np.array([coeff_name.index(ff) for ff in feature_name])
+        coeff = coeff[:, imatch]
+        coeff_name = [coeff_name[im] for im in imatch]
+
+        self.nfeature = nfeature
+        self.ncoeff = coeff.shape[-1]
+        self.coeff_name = coeff_name
+        self.coeff = coeff
+
+        # Match the intercepts to the classifications
+        if intercept is not None:
+            uclass, ind_class = np.unique(classification, return_inverse=True)
+            intercept_name = list(intercept_name)
+
+            intercept_list = []
+            for nn, name in enumerate(uclass):
+                if name in intercept_name:
+                    im = intercept_name.index(name)
+                    intercept_list.append( intercept[:, im, np.newaxis] )
+                else:
+                    intercept_list.append( np.zeros(self.N + (1,), dtype=np.float32) )
+
+            self.fit_intercept = True
+            self.classification = classification
+            self.intercept = np.concatenate(tuple(intercept_list), axis=-1)
+            self.intercept_name = uclass
+            self.nintercept = self.intercept.shape[-1]
+
+        else:
+            self.fit_intercept = False
+            self.classification = classification
+            self.intercept = np.zeros(self.N + (1,), dtype=np.float32)
+            self.intercept_name = None
+            self.nintercept = 0
+
+        # Determine number of data points
+        self.number = np.sum(self._flag.astype(np.int), axis=-1)
+
+        # Evaluate model
+        self.model = np.sum(self.coeff[:, np.newaxis, :] * self._base_x, axis=-1)
+
+        # Add intercepts to the model
+        if self.fit_intercept:
+            for ii in range(self.nintercept):
+                this_group = np.flatnonzero(ind_class == ii)
+                self.model[:, this_group] += self.intercept[:, ii, np.newaxis]
+
+        # Calculate residuals
+        self.resid = self.data - self.model
+
+
+class JointTempRegression(TempRegression, JointTempBase):
 
     def __init__(self, x, data, groups, classification=None,
                  flag=None, fit_intercept=True, coeff_name=None):
@@ -233,6 +363,7 @@ class JointTempRegression(TempRegression):
 
         self.coeff_name = coeff_name
 
+        # Set up sparse feature matrix
         # Determine what groups actually contain data
         self._good_input = np.flatnonzero(np.any(flag, axis=1))
         self._with_data = np.any((x != 0.0) & flag[:, :, np.newaxis], axis=1)
@@ -269,6 +400,7 @@ class JointTempRegression(TempRegression):
         # Add input dependent intercept
         self.nintercept = 0
         self.intercept_name = ['intercept']
+        self.classification = classification
         if self.fit_intercept:
             if classification is not None:
                 uniqc, indc = np.unique(classification, return_inverse=True)
@@ -384,40 +516,6 @@ class JointTempRegression(TempRegression):
 
         self.model = self._x.dot(coeff).reshape(self.data.shape)
         self.resid = self.data - self.model
-
-    def refine_model(self, include):
-
-        all_names = []
-        for inc in include:
-
-            name, index = self._get_feature_index(inc)
-
-            if index.size > 0:
-
-                model = np.sum(self.coeff[:, np.newaxis, index] * self._base_x[:, :, index], axis=-1)
-
-                attr = '_'.join(['model', name])
-                setattr(self, attr, model)
-                all_names.append(attr)
-
-                attr = '_'.join(['resid', name])
-                setattr(self, attr, self.data - model)
-                all_names.append(attr)
-
-        return all_names
-
-    def _get_feature_index(self, include):
-
-        if not isinstance(include, (list, tuple)):
-            include = [include]
-
-        index = []
-        for inc in include:
-            index += [ff for ff, feat in enumerate(self.coeff_name) if feat.startswith(inc)]
-
-        description = '_'.join(include)
-
-        return description, np.unique(index)
 
 
 def construct_delay_template(omega, phase, flag, min_num_freq_for_delay_fit=100):
@@ -691,8 +789,11 @@ def get_timing_correction(sdata, files, set_reference=False, transit_window=2400
         if return_amp:
             scale = 1.0 if tc.amp_to_delay is None else tc.amp_to_delay
             print("Scaling amplitude by %0.2f" % scale)
-            ns[:, this_transit], _ = scale * tc.get_alpha(timestamp, **interp_kwargs)
-            ns_cal[:, this_transit], _ = scale * tc.get_alpha(timestamp_cal, **interp_kwargs)
+            this_amp, _ = tc.get_alpha(timestamp, **interp_kwargs)
+            this_amp_cal, _ = tc.get_alpha(timestamp_cal, **interp_kwargs)
+
+            ns[:, this_transit] = scale * this_amp
+            ns_cal[:, this_transit] = scale * this_amp_cal
 
         else:
             ns[:, this_transit], _ = tc.get_tau(timestamp, ignore_amp=ignore_amp, **interp_kwargs)
@@ -958,26 +1059,26 @@ def mean_subtract(axes, dataset, flag, use_calibrator=False):
     ninput, ntime = dataset.shape
     weight = flag.astype(dataset.dtype)
 
-    usources = np.unique(axes['source'][:])
+    sources = axes['source'][:]
+    calibrators = axes['calibrator'][:]
+
+    pairs = list(set([pair for pair in zip(calibrators, sources)]))
+    npair = len(pairs)
+
     ucsd = np.unique(axes['csd'][:])
-
-    cal = axes.attrs.get('calibrator', 'CYG_A')
-
-    nsources = usources.size
     ncsd = ucsd.size
 
     dataset_no_mu = dataset.copy()
-    mu = np.zeros((ninput, ncsd, nsources), dtype=dataset.dtype)
-    mu_flag = np.zeros((ninput, ncsd, nsources), dtype=np.bool)
+    mu = np.zeros((ninput, ncsd, npair), dtype=dataset.dtype)
+    mu_flag = np.zeros((ninput, ncsd, npair), dtype=np.bool)
 
     for cc, csd in enumerate(ucsd):
 
-        for ss, src in enumerate(usources):
+        for ss, (cal, src) in enumerate(pairs):
 
             mcalc = cal if use_calibrator else src
-            this_calc = np.flatnonzero((axes['source'][:] == mcalc) & (axes['csd'][:] == csd))
-
-            this_time = np.flatnonzero((axes['source'][:] == src) & (axes['csd'][:] == csd))
+            this_calc = np.flatnonzero((sources == mcalc) & (calibrators == cal) & (axes['csd'][:] == csd))
+            this_time = np.flatnonzero((sources == src) & (calibrators == cal) & (axes['csd'][:] == csd))
 
             if (this_calc.size > 0) and (this_time.size > 0):
                 norm = np.sum(weight[:, this_calc], axis=-1)
